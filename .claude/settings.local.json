@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(python -m pip install \"motor>=3.3.0\" \"pymongo>=4.6.0\" 2>&1)",
+      "Read(//c/Users/akash/.claude/projects/c--Users-akash-OneDrive-Desktop-fin/memory/**)",
+      "Bash(git commit -m ' *)",
+      "Bash(git push *)"
+    ],
+    "additionalDirectories": [
+      "c:\\Users\\akash\\.claude\\projects\\c--Users-akash-OneDrive-Desktop-fin\\memory"
+    ]
+  }
+}

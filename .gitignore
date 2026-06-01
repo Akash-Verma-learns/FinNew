@@ -1,0 +1,33 @@
+# Environment — never commit secrets
+.env
+.env.local
+.env.*.local
+
+# Dependencies
+node_modules/
+
+# Python (if any tooling is added)
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp
+
+# Test coverage
+coverage/
+.nyc_output/
+
+# Temp / uploads
+tmp/
+uploads/

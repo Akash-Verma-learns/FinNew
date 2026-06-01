@@ -1,0 +1,104 @@
+from __future__ import annotations
+
+from .models import CascadeInfo, Claim, ClaimType, RedFlag, ValidationResult, ValidationStatus
+from .red_flags import check_red_flags, detect_bias
+
+CLAIM_WEIGHTS: dict[str, float] = {
+    ClaimType.DIRECT_FACT: 1.0,
+    ClaimType.DERIVED_METRIC: 0.9,
+    ClaimType.ACCOUNTING_POLICY: 0.85,
+    ClaimType.MODEL_ASSUMPTION: 0.7,
+    ClaimType.FORWARD_PROJECTION: 0.6,
+    ClaimType.RECOMMENDATION: 0.4,
+    ClaimType.QUALITATIVE: 0.25,
+}
+
+STATUS_SCORES: dict[ValidationStatus, float] = {
+    ValidationStatus.VERIFIED: 1.0,
+    ValidationStatus.PARTIALLY_VERIFIED: 0.65,
+    ValidationStatus.UNVERIFIABLE: 0.5,
+    ValidationStatus.CONTRADICTED: 0.0,
+    ValidationStatus.NOT_APPLICABLE: 0.5,
+    ValidationStatus.ERROR: 0.4,
+}
+
+CASCADE_DEPS: dict[str, list[str]] = {
+    ClaimType.ACCOUNTING_POLICY: [ClaimType.DERIVED_METRIC, ClaimType.FORWARD_PROJECTION],
+    ClaimType.DIRECT_FACT: [ClaimType.DERIVED_METRIC, ClaimType.FORWARD_PROJECTION, ClaimType.MODEL_ASSUMPTION],
+    ClaimType.DERIVED_METRIC: [ClaimType.FORWARD_PROJECTION, ClaimType.MODEL_ASSUMPTION],
+    ClaimType.FORWARD_PROJECTION: [ClaimType.RECOMMENDATION],
+}
+
+SEVERITY_PENALTIES = {"HIGH": 10, "MEDIUM": 5, "LOW": 2}
+
+
+def score_report(
+    claims: list[Claim],
+    validations: dict[str, ValidationResult],
+) -> dict:
+    total_weight = 0.0
+    weighted_sum = 0.0
+    type_scores: dict[str, list[float]] = {}
+
+    for claim in claims:
+        v = validations.get(claim.id)
+        if not v:
+            continue
+        weight = CLAIM_WEIGHTS.get(claim.type, 0.5)
+        status_score = STATUS_SCORES.get(v.status, 0.5)
+        confidence = max(v.confidence, 0.5) if v.status == ValidationStatus.UNVERIFIABLE else v.confidence
+        contribution = weight * status_score * confidence
+        weighted_sum += contribution
+        total_weight += weight
+        type_scores.setdefault(claim.type, []).append(status_score * confidence * 100)
+
+    raw_score = (weighted_sum / total_weight * 100) if total_weight > 0 else 50.0
+
+    claim_by_type: dict[str, list[Claim]] = {}
+    for c in claims:
+        claim_by_type.setdefault(c.type, []).append(c)
+
+    cascades: list[CascadeInfo] = []
+    cascade_penalty = 0.0
+    for root_type, dep_types in CASCADE_DEPS.items():
+        for root_claim in claim_by_type.get(root_type, []):
+            v = validations.get(root_claim.id)
+            if v and v.status == ValidationStatus.CONTRADICTED:
+                affected = [c.id for dt in dep_types for c in claim_by_type.get(dt, [])]
+                if affected:
+                    cascades.append(CascadeInfo(
+                        root_claim_id=root_claim.id,
+                        affected_ids=affected,
+                        message=f"Contradicted {root_type} invalidates downstream: {', '.join(dep_types)}",
+                    ))
+                    cascade_penalty += 5 * len(dep_types)
+
+    red_flags: list[RedFlag] = check_red_flags(claims, validations)
+    flag_penalty = sum(SEVERITY_PENALTIES.get(f.severity, 0) for f in red_flags)
+
+    final_score = max(0.0, min(100.0, raw_score - cascade_penalty - flag_penalty))
+    breakdown = {t: round(sum(scores) / len(scores), 1) for t, scores in type_scores.items()}
+
+    verified = sum(1 for v in validations.values() if v.status == ValidationStatus.VERIFIED)
+    contradicted = sum(1 for v in validations.values() if v.status == ValidationStatus.CONTRADICTED)
+
+    if final_score >= 80:
+        rating = "HIGH"
+    elif final_score >= 60:
+        rating = "MODERATE"
+    elif final_score >= 40:
+        rating = "LOW"
+    else:
+        rating = "VERY LOW"
+
+    return {
+        "overall_score": round(final_score, 1),
+        "credibility_rating": rating,
+        "breakdown": breakdown,
+        "cascades": [c.model_dump() for c in cascades],
+        "red_flags": [f.model_dump() for f in red_flags],
+        "analyst_bias": detect_bias(claims),
+        "verified_count": verified,
+        "contradicted_count": contradicted,
+        "claim_count": len(claims),
+    }

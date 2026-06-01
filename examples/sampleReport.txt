@@ -1,0 +1,43 @@
+Apple Inc. — Equity Research Report
+Analyst: Sample Research Team
+Date: November 2024
+
+EXECUTIVE SUMMARY
+
+Apple Inc. (NASDAQ: AAPL) reported total net sales of $391.035 billion for fiscal year 2024
+(ended September 28, 2024), representing a modest 2% increase year-over-year from $383.3
+billion in FY2023. Services revenue reached an all-time high of $96.2 billion, growing 13%
+annually and now representing nearly 25% of total revenue.
+
+The company achieved a gross margin of 46.2% in FY2024, up from 44.1% in the prior year,
+driven by the higher-margin Services segment. Net income was $93.7 billion, yielding diluted
+earnings per share of $6.11.
+
+VALUATION MODEL
+
+Our DCF model applies a WACC of 8.5% and a terminal growth rate of 3.0%, yielding an
+intrinsic value estimate of $215 per share. We apply an exit P/E multiple of 28x to our
+FY2026 EPS estimate of $7.50, arriving at a price target of $210.
+
+BALANCE SHEET HIGHLIGHTS
+
+Apple ended FY2024 with $156.8 billion in cash, cash equivalents, and marketable securities.
+Long-term debt stood at $85.8 billion. The company repurchased $94.9 billion in shares during
+the fiscal year, reducing its share count by approximately 3%.
+
+ACCOUNTING POLICY NOTE
+
+Apple uses the first-in, first-out (FIFO) method for inventory valuation. The company
+depreciates property, plant, and equipment using the straight-line method over estimated
+useful lives of 1 to 30 years.
+
+FORWARD GUIDANCE
+
+For Q1 FY2025, Apple guided total revenue of $124–$125 billion, implying approximately
+5% year-over-year growth. Management expects Services gross margin to remain above 74%.
+
+RECOMMENDATION
+
+We rate Apple BUY with a 12-month price target of $210. The stock offers a compelling
+combination of durable free cash flow generation ($108.8 billion in FY2024 operating cash
+flow), an expanding services flywheel, and disciplined capital return programme.
