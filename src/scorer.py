@@ -15,7 +15,7 @@ CLAIM_WEIGHTS: dict[str, float] = {
 
 STATUS_SCORES: dict[ValidationStatus, float] = {
     ValidationStatus.VERIFIED: 1.0,
-    ValidationStatus.PARTIALLY_VERIFIED: 0.65,
+    ValidationStatus.PARTIALLY_VERIFIED: 0.75,
     ValidationStatus.UNVERIFIABLE: 0.5,
     ValidationStatus.CONTRADICTED: 0.0,
     ValidationStatus.NOT_APPLICABLE: 0.5,
@@ -44,6 +44,12 @@ def score_report(
         v = validations.get(claim.id)
         if not v:
             continue
+        # Non-checkable claims have no numeric value to verify — they default to
+        # UNVERIFIABLE and add no signal.  Counting them drags the weighted average
+        # toward 0.25 (UNVERIFIABLE × min_confidence floor) even when all numeric
+        # facts are correct.  Skip them from the score; they still appear in the UI.
+        if not claim.checkable:
+            continue
         weight = CLAIM_WEIGHTS.get(claim.type, 0.5)
         status_score = STATUS_SCORES.get(v.status, 0.5)
         confidence = max(v.confidence, 0.5) if v.status == ValidationStatus.UNVERIFIABLE else v.confidence
@@ -60,7 +66,13 @@ def score_report(
 
     cascades: list[CascadeInfo] = []
     cascade_penalty = 0.0
+    # Cap per claim-type: once we know a given root type has contradicted claims,
+    # the full cascade signal is captured by a single penalty entry.  Adding N×15
+    # for every contradicted root claim in a large filing (e.g. 44 DIRECT_FACTs
+    # from a "(in millions)" table → 660 penalty) would overwhelm the raw score
+    # (max ~100) even on a report with no real data problems.
     for root_type, dep_types in CASCADE_DEPS.items():
+        any_contradicted_for_type = False
         for root_claim in claim_by_type.get(root_type, []):
             v = validations.get(root_claim.id)
             if v and v.status == ValidationStatus.CONTRADICTED:
@@ -71,7 +83,9 @@ def score_report(
                         affected_ids=affected,
                         message=f"Contradicted {root_type} invalidates downstream: {', '.join(dep_types)}",
                     ))
-                    cascade_penalty += 5 * len(dep_types)
+                    if not any_contradicted_for_type:
+                        cascade_penalty += 3 * len(dep_types)
+                        any_contradicted_for_type = True
 
     red_flags: list[RedFlag] = check_red_flags(claims, validations)
     flag_penalty = sum(SEVERITY_PENALTIES.get(f.severity, 0) for f in red_flags)

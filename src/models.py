@@ -69,6 +69,33 @@ class ValidationResult(BaseModel):
     formula_inputs: dict[str, float] = {}      # {"GrossProfit": 180683e6, "Revenues": 391035e6}
     all_definitions: list[FormulaDefinition] = []  # all sources that produced a value
     definition_delta: Optional[float] = None   # max - min across all definitions
+    # Structured citations (richer than the URL-only citations list)
+    structured_citations: list[Citation] = []
+    # Conflicts detected between sources (e.g. XBRL GAAP vs 8-K non-GAAP)
+    source_conflicts: list[SourceConflict] = []
+
+
+class Citation(BaseModel):
+    source: str          # EDGAR_XBRL | 10K_TEXT | 8K_NONGAAP | SEGMENT | WEB | FORMULA
+    label: str           # Human-readable source name
+    url: Optional[str] = None
+    ticker: Optional[str] = None
+    filing: Optional[str] = None       # "10-K 2024", "8-K Q4 2024"
+    accession: Optional[str] = None
+    field: Optional[str] = None        # XBRL concept or metric name
+    value: Optional[str] = None        # formatted value found in source
+    section: Optional[str] = None      # document section or note
+    excerpt: Optional[str] = None      # short text quote from filing
+    period: Optional[str] = None
+
+
+class SourceConflict(BaseModel):
+    source_a: str
+    source_b: str
+    value_a: str
+    value_b: str
+    difference_pct: Optional[float] = None
+    message: str
 
 
 class RedFlag(BaseModel):

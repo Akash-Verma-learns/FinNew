@@ -50,6 +50,14 @@ class _Collections:
     def filing_index(self) -> AsyncIOMotorCollection:
         return _db["filing_index"]
 
+    @property
+    def non_gaap_metrics(self) -> AsyncIOMotorCollection:
+        return _db["non_gaap_metrics"]
+
+    @property
+    def segment_facts(self) -> AsyncIOMotorCollection:
+        return _db["segment_facts"]
+
 
 collections = _Collections()
 
@@ -114,6 +122,18 @@ async def _ensure_indexes() -> None:
     # text_chunks — standard compound; vector index must be created in Atlas UI
     await collections.text_chunks.create_indexes([
         IndexModel([("cik", ASCENDING), ("form", ASCENDING), ("section", ASCENDING), ("period_end", DESCENDING)]),
+    ])
+
+    # non_gaap_metrics — 8-K earnings release non-GAAP reconciliation data
+    await collections.non_gaap_metrics.create_indexes([
+        IndexModel([("cik", ASCENDING), ("period_end", DESCENDING), ("metric_name", ASCENDING)]),
+        IndexModel([("cik", ASCENDING), ("metric_name", ASCENDING)]),
+    ])
+
+    # segment_facts — ASC 280 segment-level revenue/income from 10-K notes
+    await collections.segment_facts.create_indexes([
+        IndexModel([("cik", ASCENDING), ("period_end", DESCENDING), ("segment_name", ASCENDING), ("metric", ASCENDING)]),
+        IndexModel([("cik", ASCENDING), ("metric", ASCENDING)]),
     ])
 
     logger.info("MongoDB indexes ensured")

@@ -20,7 +20,7 @@ from typing import Optional
 
 from .embeddings import embed_one
 from .groq_client import chat, parse_json
-from .models import ValidationResult, ValidationStatus
+from .models import Citation, ValidationResult, ValidationStatus
 from .xbrl_lookup import _normalize_ticker, _parse_value, _compare, _format_value
 
 logger = logging.getLogger(__name__)
@@ -151,7 +151,22 @@ async def rag_verify(claim) -> Optional[ValidationResult]:
         result.filing_source = f"10-K text chunks (RAG) — {chunks[0].get('section', 'unknown')} section"
         result.cik = cik
         result.edgar_url = chunks[0].get("edgar_url")
-        result.citations = list({c.get("edgar_url") for c in chunks if c.get("edgar_url")})
+        unique_urls = list({c.get("edgar_url") for c in chunks if c.get("edgar_url")})
+        result.citations = unique_urls
+        result.structured_citations = [
+            Citation(
+                source="10K_TEXT",
+                label=f"10-K {c.get('section', 'unknown')} (RAG)",
+                url=c.get("edgar_url"),
+                ticker=ticker,
+                filing=f"10-K {c.get('period_end', '')}",
+                section=c.get("section"),
+                excerpt=c.get("text", "")[:200],
+                period=c.get("period_end"),
+            )
+            for c in chunks
+            if c.get("edgar_url") or c.get("section")
+        ]
 
         logger.info("  [rag] LLM verdict: claim=%s status=%s confidence=%.2f",
                     claim.id, status.value, result.confidence)

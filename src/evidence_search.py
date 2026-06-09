@@ -143,12 +143,19 @@ def build_search_query(claim) -> str:
     # For non-US tickers, use the local market suffix (CJT.TO, VOD.L) so
     # Yahoo Finance / stockanalysis results match the right company.
     ticker_fmt = _exchange_ticker_suffix(resolved) if intl and resolved else (claim.ticker or "")
-    return template.format(
+    query = template.format(
         company=claim.company or "",
         ticker=ticker_fmt,
         metric=claim.metric or "",
         period=claim.period or "",
     ).strip()
+    if query:
+        return query
+    # QUALITATIVE claims have no literal text in their template ("{company} {metric}"),
+    # so a claim with neither field set (common for narrative statements without a
+    # named company/metric) would otherwise produce an empty string — Tavily rejects
+    # empty queries with a 400. Fall back to the claim's own text.
+    return " ".join((claim.raw_text or "").split())[:150]
 
 
 def get_domains(claim) -> list[str]:

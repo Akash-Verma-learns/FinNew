@@ -65,9 +65,22 @@ def check_red_flags(
                 message="All recommendations are bullish — no bearish counterbalance in report",
             ))
 
-    for c in by_type.get(ClaimType.ACCOUNTING_POLICY, []):
-        if validations.get(c.id, _default(c.id)).status == ValidationStatus.UNVERIFIABLE:
-            flags.append(RedFlag(severity="LOW", message="Accounting policy claim could not be verified against filing"))
+    # One aggregate LOW flag for any accounting policy claims that couldn't be
+    # verified — accounting policies describe methods ("we use straight-line
+    # depreciation") that are inherently hard to verify programmatically, so
+    # having several of them be UNVERIFIABLE is expected and does not warrant a
+    # per-claim penalty.  N separate LOW flags would impose 2N penalty points,
+    # which combined with cascade penalties can floor an otherwise-reasonable
+    # report to 0.0 even when all numeric claims are correct.
+    unverifiable_policies = [
+        c for c in by_type.get(ClaimType.ACCOUNTING_POLICY, [])
+        if validations.get(c.id, _default(c.id)).status == ValidationStatus.UNVERIFIABLE
+    ]
+    if unverifiable_policies:
+        flags.append(RedFlag(
+            severity="LOW",
+            message=f"{len(unverifiable_policies)} accounting policy claim(s) could not be verified against filing",
+        ))
 
     return flags
 

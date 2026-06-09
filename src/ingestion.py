@@ -64,12 +64,14 @@ async def ingest_ticker(ticker: str) -> dict:
             if concept not in gaap:
                 continue
             units = gaap[concept].get("units", {})
+            concept_label = gaap[concept].get("label")
             found = _find_period_value(units, period=None)
             if found:
                 val, period_end, accn, filed = found
                 rows.append({
                     "alias": alias,
                     "concept": concept,
+                    "concept_label": concept_label,
                     "value": val,
                     "period_end": period_end,
                     "accn": accn,
@@ -81,6 +83,7 @@ async def ingest_ticker(ticker: str) -> dict:
                     rows.append({
                         "alias": alias,
                         "concept": concept,
+                        "concept_label": concept_label,
                         "value": entry["val"],
                         "period_end": entry["end"],
                         "accn": entry.get("accn", ""),
@@ -105,6 +108,7 @@ async def ingest_ticker(ticker: str) -> dict:
             "period_end": row["period_end"],
             "period_type": "annual",
             "xbrl_concept": row["concept"],
+            "concept_label": row.get("concept_label"),
             "metric_alias": row["alias"],
             "value": row["value"],
             "unit": "USD",
@@ -144,6 +148,15 @@ async def ingest_ticker(ticker: str) -> dict:
         except Exception as exc:
             logger.warning("Text ingestion failed (non-fatal): %s", exc)
 
+    # 8-K non-GAAP reconciliation ingestion
+    nongaap_result = {"metrics_written": 0}
+    try:
+        from .nongaap_parser import ingest_8k_nongaap
+        nongaap_result = await ingest_8k_nongaap(ticker, cik)
+        logger.info("Non-GAAP ingestion: %d metrics written", nongaap_result.get("metrics_written", 0))
+    except Exception as exc:
+        logger.warning("Non-GAAP ingestion failed (non-fatal): %s", exc)
+
     return {
         "cik": cik,
         "ticker": ticker,
@@ -151,6 +164,7 @@ async def ingest_ticker(ticker: str) -> dict:
         "facts_written": facts_written,
         "derived_written": derived_written,
         "text_chunks_written": text_result.get("chunks_written", 0),
+        "nongaap_metrics_written": nongaap_result.get("metrics_written", 0),
     }
 
 

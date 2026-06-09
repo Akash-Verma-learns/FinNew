@@ -2,14 +2,17 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from typing import Optional
 
 _WEB_SEARCH_DISABLED = os.getenv("DISABLE_WEB_SEARCH", "").lower() in ("true", "1", "yes")
 
 from .evidence_search import build_search_query, get_domains, tavily_search
 from .groq_client import chat, parse_json
-from .models import Claim, ClaimType, FormulaDefinition, ValidationResult, ValidationStatus
+from .models import Citation, Claim, ClaimType, FormulaDefinition, SourceConflict, ValidationResult, ValidationStatus
+from .nongaap_parser import lookup_nongaap
 from .rag import rag_verify
+from .segment_parser import lookup_segment_fact
 from .xbrl_lookup import (
     MARGIN_CONCEPTS,
     _compare,
@@ -21,6 +24,7 @@ from .xbrl_lookup import (
     get_latest_10k,
     lookup_derived_ratio,
     lookup_direct_fact,
+    lookup_growth_rate,
     lookup_xbrl_value_match,
 )
 
@@ -46,7 +50,7 @@ def clear_validation_cache() -> None:
     _validation_cache.clear()
 
 
-VALIDATION_PROMPT = """You are a financial analyst validating a claim from a research report against web evidence.
+VALIDATION_PROMPT = """You are a financial analyst validating a claim from a report against web evidence.
 
 Claim: {raw_text}
 Company: {company} ({ticker})
@@ -57,20 +61,91 @@ Period: {period}
 Evidence:
 {evidence}
 
-Validation rules:
-- VERIFIED (confidence 0.8-1.0): Evidence explicitly confirms the stated value or fact for the correct company.
-- PARTIALLY_VERIFIED (confidence 0.5-0.79): Evidence is from the correct company and directionally consistent, but the exact figure is not present or is for a slightly different period.
-- CONTRADICTED (confidence 0.8-1.0): Evidence explicitly shows a different value for the same metric and company.
-- UNVERIFIABLE (confidence 0.0): Evidence is about a different company entirely, OR the evidence is completely unrelated to the claim.
+Validation rules — VERIFIED is the default when evidence confirms the company and metric:
 
-Important:
-- Non-US companies (e.g. Canadian, European) file annual reports on their local exchange — not SEC 10-K. Accept annual reports, MD&A, press releases, and financial data sites as valid evidence.
-- If the evidence mentions the correct company and confirms the general direction (e.g. revenue growth, margin improvement) even without the exact number, use PARTIALLY_VERIFIED.
-- Only return UNVERIFIABLE if the evidence is clearly about a different company or completely irrelevant.
-- Do NOT return UNVERIFIABLE just because the exact figure is missing — use PARTIALLY_VERIFIED for directional confirmation.
+VERIFIED (confidence 0.85-1.0): Use VERIFIED when the evidence confirms the claim for the correct company and the same metric/activity. These all count as VERIFIED:
+  - The stated number appears in the evidence (even rounded: "~$75B" confirms "$75 billion")
+  - Threshold language matches: "surpassed $75B", "exceeded $75B", "reached $75B", "more than $75B", "over $75B" ALL verify a stated value of "$75 billion"
+  - "More than 20 million users" in evidence verifies a stated "more than 20 million users"
+  - A company press release, earnings call transcript, official blog, or case study from the SAME company confirming the same customer statistic (e.g., Microsoft blog confirming Carvana's 45% call reduction)
+  - Announcement claims (commitments, investments, partnerships): evidence confirming the announcement was made counts as VERIFIED for that claim
+  - Set confidence 0.9 when the exact figure appears; 0.85 when confirmed via threshold/approximate language
+
+PARTIALLY_VERIFIED (confidence 0.55-0.79): Evidence is about the same company and same metric but the specific number is MATERIALLY different (>15% off) from what is stated, OR refers to a meaningfully different time period with no equivalent current-period data available.
+
+CONTRADICTED (confidence 0.85-1.0): ONLY use this when evidence from the SAME period explicitly states a MATERIALLY DIFFERENT value (>15% off) for the identical metric and company. Do NOT use CONTRADICTED for minor rounding differences, different-period comparisons, or when evidence uses approximate language. When in doubt between CONTRADICTED and PARTIALLY_VERIFIED, choose PARTIALLY_VERIFIED.
+
+UNVERIFIABLE (confidence 0.0): Evidence is about a different company, a completely different metric/activity, or a non-comparable time period (e.g., a decade-old statistic for a "this year" claim). Use UNVERIFIABLE only when the evidence cannot speak to the claim at all.
+
+Critical rules:
+- Do NOT use CONTRADICTED for threshold language mismatches ("more than 400" vs "400") — these are the same claim
+- Do NOT use CONTRADICTED when evidence mentions a different fiscal year's number without also contradicting the claimed year
+- For FORWARD_PROJECTION claims: if evidence confirms the commitment/investment/target was announced, return VERIFIED
+- Non-US companies: accept annual reports, MD&A, press releases, and financial data sites as authoritative
+- Set "actual_value" ONLY to a figure that the evidence reports for the SAME metric, in a comparable period
 
 Return JSON only, no markdown:
 {{"status": "VERIFIED|PARTIALLY_VERIFIED|UNVERIFIABLE|CONTRADICTED", "confidence": 0.0-1.0, "reasoning": "one sentence", "actual_value": "value found or null"}}"""
+
+
+_NONGAAP_KEYWORDS = frozenset({
+    "non-gaap", "non gaap", "adjusted", "adj.", "adj ",
+    "non gaap eps", "adjusted ebitda", "adjusted earnings",
+    "adjusted operating", "core earnings", "ex-items",
+})
+
+# Detect delta/change language ("increased $2.8B") vs result language ("grew to $168.9B").
+# Used in validate_derived_metric to avoid comparing a YoY delta against an XBRL total.
+_DELTA_VERB_RE = re.compile(r"\b(increased?|decreased?|grew|declined?|fell|rose)\b", re.IGNORECASE)
+_TO_AMOUNT_RE = re.compile(r"\bto\s+\$?\s*[\d]", re.IGNORECASE)
+
+
+def _is_nongaap_claim(claim: Claim) -> bool:
+    metric_lower = (claim.metric or "").lower()
+    return any(kw in metric_lower for kw in _NONGAAP_KEYWORDS)
+
+
+def _detect_conflicts(
+    primary: ValidationResult,
+    secondary: Optional[ValidationResult],
+    primary_source: str,
+    secondary_source: str,
+) -> list[SourceConflict]:
+    """
+    Compare two ValidationResult values. If they disagree by > 5%, return a SourceConflict.
+    Both results must be non-UNVERIFIABLE and have parseable actual_value fields.
+    """
+    if secondary is None:
+        return []
+    if primary.status in (ValidationStatus.UNVERIFIABLE, ValidationStatus.ERROR):
+        return []
+    if secondary.status in (ValidationStatus.UNVERIFIABLE, ValidationStatus.ERROR):
+        return []
+    val_a_str = primary.actual_value or ""
+    val_b_str = secondary.actual_value or ""
+    if not val_a_str or not val_b_str:
+        return []
+    from .xbrl_lookup import _parse_value
+    val_a = _parse_value(val_a_str)
+    val_b = _parse_value(val_b_str)
+    if val_a is None or val_b is None or val_a == 0:
+        return []
+    diff_pct = abs(val_a - val_b) / abs(val_a) * 100
+    if diff_pct < 5.0:
+        return []
+    return [
+        SourceConflict(
+            source_a=primary_source,
+            source_b=secondary_source,
+            value_a=val_a_str,
+            value_b=val_b_str,
+            difference_pct=round(diff_pct, 2),
+            message=(
+                f"{primary_source} reports {val_a_str} but {secondary_source} reports {val_b_str} "
+                f"({diff_pct:.1f}% difference). The report may be citing a non-GAAP / adjusted figure."
+            ),
+        )
+    ]
 
 
 def _log_step(claim_id: str, step: int, name: str, msg: str) -> None:
@@ -90,6 +165,11 @@ async def _search_and_reason(claim: Claim) -> ValidationResult:
         search = await tavily_search(query, domains)
         result.citations = search["citations"]
         result.evidence = search["context"][:500]
+        result.structured_citations = [
+            Citation(source="WEB", label="Web Search", url=url)
+            for url in search["citations"]
+            if url
+        ]
         logger.info("  [%s] step 6 (web-search): got %d citations: %s",
                     claim.id, len(result.citations), result.citations)
 
@@ -114,9 +194,9 @@ async def _search_and_reason(claim: Claim) -> ValidationResult:
         result.actual_value = data.get("actual_value")
         logger.info("  [%s] step 6 (web-search) → %s (conf=%.2f)", claim.id, result.status.value, result.confidence)
     except Exception as exc:
-        logger.error("_search_and_reason error for %s: %s", claim.id, exc)
-        result.status = ValidationStatus.ERROR
-        result.reasoning = str(exc)
+        logger.warning("_search_and_reason error for %s: %s — returning UNVERIFIABLE", claim.id, exc)
+        result.status = ValidationStatus.UNVERIFIABLE
+        result.reasoning = f"Web search unavailable: {exc}"
     return result
 
 
@@ -130,6 +210,12 @@ async def validate_direct_fact(claim: Claim) -> ValidationResult:
         result = await lookup_direct_fact(claim)
         if result.status not in (ValidationStatus.UNVERIFIABLE, ValidationStatus.ERROR):
             _log_result(claim.id, 1, "xbrl-direct", result.status, result.confidence)
+            # If the claim may be quoting a non-GAAP figure, cross-check 8-K for conflicts
+            if _is_nongaap_claim(claim):
+                nongaap_check = await lookup_nongaap(claim)
+                result.source_conflicts = _detect_conflicts(
+                    result, nongaap_check, "SEC EDGAR XBRL (GAAP)", "8-K Non-GAAP"
+                )
             return result
         _log_step(claim.id, 1, "xbrl-direct", f"miss → {result.status.value} — trying next")
 
@@ -159,22 +245,41 @@ async def validate_direct_fact(claim: Claim) -> ValidationResult:
                 return match
             _log_step(claim.id, 4, "value-match", "no match within 1.5% tolerance")
 
-        # 5. RAG — retrieve from 10-K text chunks, verify with LLM
-        _log_step(claim.id, 5, "rag", "Atlas Vector Search on 10-K text chunks")
+        # 5. Non-GAAP lookup — 8-K earnings release metrics (adjusted EPS, EBITDA, etc.)
+        _log_step(claim.id, 5, "nongaap", f"checking non_gaap_metrics DB for {claim.metric!r}")
+        nongaap = await lookup_nongaap(claim)
+        if nongaap is not None and nongaap.status not in (ValidationStatus.UNVERIFIABLE, ValidationStatus.ERROR):
+            _log_result(claim.id, 5, "nongaap", nongaap.status, nongaap.confidence)
+            # Contradiction check: compare 8-K non-GAAP against any prior XBRL result
+            xbrl_check = await lookup_direct_fact(claim)
+            nongaap.source_conflicts = _detect_conflicts(nongaap, xbrl_check, "8-K Non-GAAP", "SEC EDGAR XBRL")
+            return nongaap
+        _log_step(claim.id, 5, "nongaap", f"miss → {nongaap.status.value if nongaap else 'no data'}")
+
+        # 6. Segment lookup — ASC 280 segment-level facts from 10-K notes
+        _log_step(claim.id, 6, "segment", f"checking segment_facts DB for {claim.metric!r}")
+        seg = await lookup_segment_fact(claim)
+        if seg is not None and seg.status not in (ValidationStatus.UNVERIFIABLE, ValidationStatus.ERROR):
+            _log_result(claim.id, 6, "segment", seg.status, seg.confidence)
+            return seg
+        _log_step(claim.id, 6, "segment", f"miss → {seg.status.value if seg else 'no data'}")
+
+        # 7. RAG — retrieve from 10-K text chunks, verify with LLM
+        _log_step(claim.id, 7, "rag", "Atlas Vector Search on 10-K text chunks")
         rag = await rag_verify(claim)
         if rag is not None and rag.status not in (ValidationStatus.UNVERIFIABLE, ValidationStatus.ERROR):
-            _log_result(claim.id, 5, "rag", rag.status, rag.confidence)
+            _log_result(claim.id, 7, "rag", rag.status, rag.confidence)
             return rag
-        _log_step(claim.id, 5, "rag", f"miss → {rag.status.value if rag else 'no chunks / index not ready'}")
+        _log_step(claim.id, 7, "rag", f"miss → {rag.status.value if rag else 'no chunks / index not ready'}")
 
-    # 6. Web search (disabled when DISABLE_WEB_SEARCH=true)
+    # 8. Web search (disabled when DISABLE_WEB_SEARCH=true)
     if _WEB_SEARCH_DISABLED:
-        logger.info("  [%s] step 6 (web-search): disabled — returning UNVERIFIABLE", claim.id)
+        logger.info("  [%s] step 8 (web-search): disabled — returning UNVERIFIABLE", claim.id)
         result = ValidationResult(claim_id=claim.id)
         result.status = ValidationStatus.UNVERIFIABLE
         result.reasoning = "Local sources exhausted; web search is disabled."
         return result
-    _log_step(claim.id, 6, "web-search", "falling back to Tavily + LLM reasoning")
+    _log_step(claim.id, 8, "web-search", "falling back to Tavily + LLM reasoning")
     return await _search_and_reason(claim)
 
 
@@ -329,22 +434,86 @@ async def validate_derived_metric(claim: Claim) -> ValidationResult:
             return result
         _log_step(claim.id, 2, "live-ratio", f"miss → {result.status.value}")
 
-    # 3. RAG — 10-K text chunks (e.g. segment margin tables in MD&A)
-    _log_step(claim.id, 3, "rag", "Atlas Vector Search on 10-K text chunks")
+    # 3. YoY growth rate computation — for percentage claims about income-statement
+    # line items (e.g. "Revenue grew 15%", "Operating income up 17%").
+    # lookup_derived_ratio handles margin levels; this step handles growth rates.
+    # It fetches two consecutive annual XBRL periods and computes % change.
+    _value_str = (claim.value or "").strip()
+    _looks_like_pct = "%" in _value_str
+    if claim.ticker and claim.metric and claim.value and _looks_like_pct:
+        _log_step(claim.id, 3, "growth-rate", f"computing YoY growth for {claim.metric!r}")
+        growth = await lookup_growth_rate(claim)
+        if growth.status not in (ValidationStatus.UNVERIFIABLE, ValidationStatus.ERROR):
+            _log_result(claim.id, 3, "growth-rate", growth.status, growth.confidence)
+            return growth
+        _log_step(claim.id, 3, "growth-rate", f"miss → {growth.status.value}")
+
+    # 4. XBRL direct/value-match — for DERIVED_METRIC claims that carry an
+    # absolute dollar value (e.g. "Microsoft Cloud revenue increased 23% to
+    # $168.9 billion"), run the full XBRL pipeline so the label/embedding
+    # matching and value-scan can find the segment concept in EDGAR.
+    # Percentage-only claims (value ends with %) are skipped — XBRL doesn't
+    # store year-over-year growth rates as a direct fact.
+    # Delta-claim guard: "Cost of revenue increased $2.8B or 14%" describes a
+    # YoY change, not the total EDGAR stores.  The LLM strips "increased" from
+    # the metric ("cost of revenue") so it gets an exact CONCEPT_MAP hit and
+    # compares the $2.8B delta against the ~$88B total — a confident false
+    # CONTRADICTED.  Skip XBRL direct when raw_text has increase/decrease
+    # language but no "to $X" phrase (which marks the resulting total, not a delta).
+    _is_delta_claim = (
+        bool(claim.raw_text and _DELTA_VERB_RE.search(claim.raw_text))
+        and not bool(claim.raw_text and _TO_AMOUNT_RE.search(claim.raw_text))
+    )
+    if claim.ticker and claim.value and not _looks_like_pct and not _is_delta_claim:
+        _log_step(claim.id, 4, "xbrl-direct", f"derived metric has absolute value {claim.value!r} — trying XBRL")
+        xbrl_result = await lookup_direct_fact(claim)
+        if xbrl_result.status not in (ValidationStatus.UNVERIFIABLE, ValidationStatus.ERROR):
+            _log_result(claim.id, 4, "xbrl-direct", xbrl_result.status, xbrl_result.confidence)
+            return xbrl_result
+        _log_step(claim.id, 4, "xbrl-direct", f"miss → {xbrl_result.status.value}")
+
+        # Segment/extension fallback: company-specific XBRL concepts (e.g.
+        # "Microsoft Cloud revenue") live outside us-gaap, so lookup_direct_fact
+        # won't find them. Value-match scans ALL namespaces by value.
+        _log_step(claim.id, 4, "xbrl-value-match", f"scanning all XBRL namespaces for {claim.value!r}")
+        vm_result = await lookup_xbrl_value_match(claim)
+        if vm_result.status not in (ValidationStatus.UNVERIFIABLE, ValidationStatus.ERROR):
+            _log_result(claim.id, 4, "xbrl-value-match", vm_result.status, vm_result.confidence)
+            return vm_result
+        _log_step(claim.id, 4, "xbrl-value-match", "no match within tolerance")
+
+    # 5. Non-GAAP lookup — adjusted/non-GAAP derived metrics from 8-K
+    _log_step(claim.id, 5, "nongaap", f"checking non_gaap_metrics DB for {claim.metric!r}")
+    nongaap = await lookup_nongaap(claim)
+    if nongaap is not None and nongaap.status not in (ValidationStatus.UNVERIFIABLE, ValidationStatus.ERROR):
+        _log_result(claim.id, 5, "nongaap", nongaap.status, nongaap.confidence)
+        return nongaap
+    _log_step(claim.id, 5, "nongaap", f"miss → {nongaap.status.value if nongaap else 'no data'}")
+
+    # 6. Segment lookup — segment-level metrics (e.g. Services margin, AWS income)
+    _log_step(claim.id, 6, "segment", f"checking segment_facts DB for {claim.metric!r}")
+    seg = await lookup_segment_fact(claim)
+    if seg is not None and seg.status not in (ValidationStatus.UNVERIFIABLE, ValidationStatus.ERROR):
+        _log_result(claim.id, 6, "segment", seg.status, seg.confidence)
+        return seg
+    _log_step(claim.id, 6, "segment", f"miss → {seg.status.value if seg else 'no data'}")
+
+    # 7. RAG — 10-K text chunks (e.g. segment margin tables in MD&A)
+    _log_step(claim.id, 7, "rag", "Atlas Vector Search on 10-K text chunks")
     rag = await rag_verify(claim)
     if rag is not None and rag.status not in (ValidationStatus.UNVERIFIABLE, ValidationStatus.ERROR):
-        _log_result(claim.id, 3, "rag", rag.status, rag.confidence)
+        _log_result(claim.id, 7, "rag", rag.status, rag.confidence)
         return rag
-    _log_step(claim.id, 3, "rag", f"miss → {rag.status.value if rag else 'no chunks / index not ready'}")
+    _log_step(claim.id, 7, "rag", f"miss → {rag.status.value if rag else 'no chunks / index not ready'}")
 
-    # 4. Web search (disabled when DISABLE_WEB_SEARCH=true)
+    # 8. Web search (disabled when DISABLE_WEB_SEARCH=true)
     if _WEB_SEARCH_DISABLED:
-        logger.info("  [%s] step 4 (web-search): disabled — returning UNVERIFIABLE", claim.id)
+        logger.info("  [%s] step 8 (web-search): disabled — returning UNVERIFIABLE", claim.id)
         result = ValidationResult(claim_id=claim.id)
         result.status = ValidationStatus.UNVERIFIABLE
         result.reasoning = "Local sources exhausted; web search is disabled."
         return result
-    _log_step(claim.id, 4, "web-search", "falling back to Tavily + LLM reasoning")
+    _log_step(claim.id, 8, "web-search", "falling back to Tavily + LLM reasoning")
     return await _search_and_reason(claim)
 
 
@@ -352,6 +521,14 @@ async def validate_accounting_policy(claim: Claim) -> ValidationResult:
     logger.info("[validate] claim=%s type=ACCOUNTING_POLICY ticker=%s metric=%r",
                 claim.id, claim.ticker, claim.metric)
     result = ValidationResult(claim_id=claim.id)
+
+    # Web search (disabled when DISABLE_WEB_SEARCH=true)
+    if _WEB_SEARCH_DISABLED:
+        logger.info("  [%s] sec-search: disabled — returning UNVERIFIABLE", claim.id)
+        result.status = ValidationStatus.UNVERIFIABLE
+        result.reasoning = "Local sources exhausted; web search is disabled."
+        return result
+
     try:
         filing_info = await get_latest_10k(claim.ticker) if claim.ticker else None
         query = build_search_query(claim)

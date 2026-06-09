@@ -62,6 +62,15 @@ async def ingest_text(ticker: str, cik: str, period_end: str) -> dict:
     if not html:
         return {"status": "fetch_failed", "chunks_written": 0}
 
+    # Parse segment tables from the raw HTML before converting to plain text
+    segment_result = {"facts_written": 0}
+    try:
+        from .segment_parser import ingest_segments
+        segment_result = await ingest_segments(ticker, cik, period_end, html, source_url=doc_url)
+        logger.info("[segment] %d facts written for CIK=%s", segment_result.get("facts_written", 0), cik)
+    except Exception as exc:
+        logger.warning("Segment ingestion failed (non-fatal): %s", exc)
+
     text = _html_to_text(html)
     # Regex section split (Docling is used for PDF uploads; 10-K ingestion uses HTML → text)
     sections = _split_sections(text)
@@ -106,7 +115,13 @@ async def ingest_text(ticker: str, cik: str, period_end: str) -> dict:
     sections_used = list({c["section"] for c in chunks})
     logger.info("text_chunks: wrote %d chunks (%s) for CIK=%s period=%s",
                 written, indexer, cik, period_end)
-    return {"status": "ok", "chunks_written": written, "sections": sections_used, "indexer": indexer}
+    return {
+        "status": "ok",
+        "chunks_written": written,
+        "sections": sections_used,
+        "indexer": indexer,
+        "segment_facts_written": segment_result.get("facts_written", 0),
+    }
 
 
 async def _get_primary_doc_url(cik: str, period_end: str) -> Optional[str]:
