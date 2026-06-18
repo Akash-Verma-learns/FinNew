@@ -240,6 +240,15 @@ _CONCEPT_KEY_DISQUALIFIERS = (
     # "stock-based compensation tax benefits" is a footnote sub-component, not the
     # total IncomeTaxExpenseBenefit reported on the income statement.
     "stock-based", "stock based",
+    # Product/segment revenue lines (iPhone, Services, Mac, iPad, Google Cloud,
+    # Azure, etc.) must not be looked up via the generic "revenue" XBRL concept —
+    # the match would compare a product segment against consolidated total revenue.
+    "iphone", "ipad", "mac ", "services revenue", "cloud revenue",
+    "azure", "google cloud", "gaming revenue", "advertising revenue",
+    "search revenue", "network services", "youtube",
+    # Quarterly-period labels: EDGAR stores annual/quarterly totals but a claim
+    # labelled "quarterly revenue" should not be matched against annual 10-K revenue.
+    "quarterly", "q1 ", "q2 ", "q3 ", "q4 ", " q1", " q2", " q3", " q4",
 )
 
 
@@ -418,6 +427,88 @@ def _pick_best_candidate(candidates: list, claimed_value: Optional[str], key):
         return best
 
     return min(candidates, key=_pct)
+
+
+def _parse_quarterly_period(period: str) -> Optional[tuple[int, int]]:
+    """
+    Extract (quarter, fiscal_year) from a period string, or None if not quarterly.
+
+    Handles:  "Q1 FY2024"  "Q2 2024"  "first quarter FY2023"  "Q3 fiscal 2025"
+    The returned fiscal_year matches EDGAR's fy field, which uses the company's
+    own fiscal-year numbering (Apple Q1 FY2024 → fy=2024 in EDGAR, even though
+    the calendar dates are Oct–Dec 2023).
+    """
+    p = period.lower().strip()
+    # "Q1 FY2024", "Q2 2024", "q3 fiscal 2024"
+    m = re.search(r"\bq([1-4])\b.*?(20\d{2})", p)
+    if m:
+        return int(m.group(1)), int(m.group(2))
+    # "first quarter 2024", "second quarter FY2023"
+    _ORDINALS = {"first": 1, "second": 2, "third": 3, "fourth": 4}
+    for word, num in _ORDINALS.items():
+        if word in p:
+            m2 = re.search(r"20\d{2}", p)
+            if m2:
+                return num, int(m2.group())
+    return None
+
+
+def _find_quarterly_value(
+    units: dict, quarter: int, fiscal_year: int
+) -> Optional[tuple[float, str, str, str]]:
+    """
+    Find a single-quarter XBRL value from 10-Q filings.
+
+    Matches entries where fp == "Q{n}" AND fy == fiscal_year AND form == "10-Q".
+    Returns (value, period_label, accn, filed_date) or None.
+
+    EDGAR stores single-quarter flow values (revenue, net income, EPS) with
+    fp="Q1"/"Q2"/"Q3" and the company's fiscal year.  Q4 is usually only in the
+    annual 10-K, not a separate 10-Q, so we silently return None for Q4 rather
+    than risk comparing against a full-year total.
+    """
+    entries: list[dict] = []
+    for unit_key in ("USD", "USD/shares", "shares"):
+        entries = units.get(unit_key, [])
+        if entries:
+            break
+    if not entries:
+        entries = next(iter(units.values()), [])
+
+    fp_target = f"Q{quarter}"
+    # Q4 is almost never filed as a separate 10-Q — skip rather than fabricate
+    if quarter == 4:
+        return None
+
+    matches = [
+        e for e in entries
+        if e.get("form") == "10-Q"
+        and e.get("fp") == fp_target
+        and e.get("fy") == fiscal_year
+    ]
+    if not matches:
+        return None
+
+    # EDGAR attributes fy to the FILING, so a 10-Q contains two rows for the
+    # same fp/fy: one for the current period and one for the prior-year
+    # comparative (same fp="Q1", fy=2024 but end="2022-12-31" vs "2023-12-30").
+    # Step 1: keep only the most recent end-date (the actual current quarter).
+    latest_end = max(e.get("end", "") for e in matches)
+    current = [e for e in matches if e.get("end", "") == latest_end]
+
+    # Step 2: 10-Qs report BOTH standalone quarter values ("Three months ended")
+    # AND year-to-date cumulative values ("Six months ended" for Q2, "Nine months
+    # ended" for Q3).  Both carry fp="Q2"/fp="Q3" with the same end-date and
+    # frame=(none), making them indistinguishable except by value magnitude.
+    # The standalone quarter is ALWAYS smaller in absolute value than the
+    # cumulative (standalone Q2=$90.75B vs 6-month cumulative=$210.33B).
+    # Pick the entry with the smallest absolute value to get the standalone quarter.
+    if len(current) > 1:
+        current = [min(current, key=lambda e: abs(e["val"]))]
+
+    e = current[0]
+    period_label = f"Q{quarter} FY{fiscal_year} (ended {e.get('end', '')})"
+    return e["val"], period_label, e.get("accn", ""), e.get("filed", "")
 
 
 def _find_period_value(
@@ -824,18 +915,35 @@ async def lookup_direct_fact(claim) -> ValidationResult:
         # that the claim is wrong. Downgrade those to UNVERIFIABLE rather
         # than producing a confident false CONTRADICTED verdict.
         _semantic_match = False
-        concepts = find_concepts(claim.metric or "")
+        _quarterly_period = _parse_quarterly_period(claim.period or "")
+
+        # When a quarterly period is detected and the metric begins with a temporal
+        # qualifier ("quarterly revenue", "Q1 revenue", "first quarter EPS"), strip
+        # the qualifier before concept lookup so the CONCEPT_MAP / disqualifier
+        # checks see the base metric ("revenue", "EPS") rather than the decorated
+        # phrase.  Segment-specific qualifiers ("iPhone", "Services", "Azure") are
+        # intentionally left in place — those are NOT in EDGAR and should fall
+        # through to Tavily without an XBRL attempt.
+        _metric_for_lookup = claim.metric or ""
+        if _quarterly_period:
+            _metric_for_lookup = re.sub(
+                r"^\s*(?:quarterly|annual|q[1-4]|fy\s*\d{4})\s+",
+                "",
+                _metric_for_lookup,
+                flags=re.IGNORECASE,
+            ).strip()
+
+        concepts = find_concepts(_metric_for_lookup)
         if not concepts:
-            # Tier 2: word-overlap against the filing's own XBRL labels
-            concepts = _find_concepts_by_label(gaap, claim.metric or "")
+            concepts = _find_concepts_by_label(gaap, _metric_for_lookup)
             _semantic_match = bool(concepts)
         if not concepts:
-            # Tier 3: full semantic search (all-MiniLM-L6-v2 cosine similarity)
-            concepts = await _find_concepts_by_embedding(gaap, claim.metric or "", cik)
+            concepts = await _find_concepts_by_embedding(gaap, _metric_for_lookup, cik)
             _semantic_match = bool(concepts)
         if not concepts:
             result.reasoning = f"No XBRL concept mapped for metric: {claim.metric}"
-            logger.info("  [xbrl-live] no concept found (CONCEPT_MAP + label + embedding) for metric=%r", claim.metric)
+            logger.info("  [xbrl-live] no concept found (CONCEPT_MAP + label + embedding) for metric=%r (lookup=%r)",
+                        claim.metric, _metric_for_lookup)
             return result
 
         logger.info("  [xbrl-live] trying concepts %s for metric=%r", concepts, claim.metric)
@@ -846,8 +954,22 @@ async def lookup_direct_fact(claim) -> ValidationResult:
                 logger.info("  [xbrl-live] concept=%s not in us-gaap — skipping", concept)
                 continue
             units = gaap[concept].get("units", {})
-            if _year_hint:
-                # Period specified: one entry per concept (existing behaviour)
+            if _quarterly_period:
+                # Quarterly claim: look for 10-Q entries with matching fp/fy.
+                # Don't mix with annual values — quarterly and annual revenue are
+                # different numbers (e.g. Apple Q1=$119B vs FY=$391B).
+                found = _find_quarterly_value(units, *_quarterly_period)
+                if found:
+                    actual_val, actual_period, accn, filed = found
+                    candidates.append((concept, actual_val, actual_period, accn, filed))
+                    logger.info("  [xbrl-live] 10-Q HIT: concept=%s q=%s fy=%s val=%s",
+                                concept, _quarterly_period[0], _quarterly_period[1],
+                                _format_value(actual_val))
+                else:
+                    logger.info("  [xbrl-live] concept=%s no 10-Q entry for Q%s FY%s",
+                                concept, *_quarterly_period)
+            elif _year_hint:
+                # Annual period specified: one entry per concept (existing behaviour)
                 found = _find_period_value(units, claim.period)
                 if not found:
                     logger.info("  [xbrl-live] concept=%s found but no annual entry for period=%r", concept, claim.period)
@@ -904,6 +1026,9 @@ async def lookup_direct_fact(claim) -> ValidationResult:
             # Only replace the year-hint result if the all-period candidate is
             # strictly better (e.g. VERIFIED > PARTIALLY_VERIFIED > CONTRADICTED).
             # A truly wrong stated value won't match ANY period, so false negatives rare.
+            # NOT applied to quarterly claims: _find_all_annual_values returns 10-K
+            # totals (e.g. FY annual revenue $391B) which would always dwarf a
+            # single-quarter value ($119B) and produce a confident false CONTRADICTED.
             _STATUS_RANK = {
                 ValidationStatus.VERIFIED: 3,
                 ValidationStatus.PARTIALLY_VERIFIED: 2,
@@ -915,7 +1040,7 @@ async def lookup_direct_fact(claim) -> ValidationResult:
                 or (status == ValidationStatus.PARTIALLY_VERIFIED and actual_val != 0
                     and abs(abs(_parse_value(claim.value or "") or 0) * 1 - abs(actual_val)) / abs(actual_val) > 0.05)
             )
-            if _is_poor_match and _year_hint:
+            if _is_poor_match and _year_hint and not _quarterly_period:
                 logger.info(
                     "  [xbrl-live] poor year-hint match (%s, hint=%r) — retrying across all periods",
                     status.value, _year_hint.group(),
@@ -941,10 +1066,13 @@ async def lookup_direct_fact(claim) -> ValidationResult:
             # Semantic matches (label-overlap / embedding) may have resolved the
             # wrong concept.  A large discrepancy under CONCEPT_MAP is a real
             # contradiction; under a fuzzy semantic match it just means we
-            # matched the wrong line item.  Downgrade to UNVERIFIABLE so the
-            # pipeline continues to value-match, RAG, and web-search rather than
-            # short-circuiting with a confident false CONTRADICTED verdict.
-            if _semantic_match and status == ValidationStatus.CONTRADICTED:
+            # matched the wrong line item.  Downgrade CONTRADICTED and
+            # PARTIALLY_VERIFIED to UNVERIFIABLE so the pipeline continues to
+            # value-match, RAG, and web-search rather than short-circuiting with
+            # a confident false verdict against the wrong XBRL concept.
+            if _semantic_match and status in (
+                ValidationStatus.CONTRADICTED, ValidationStatus.PARTIALLY_VERIFIED
+            ):
                 status = ValidationStatus.UNVERIFIABLE
                 confidence = 0.5
                 discrepancy = f"semantic match uncertain (concept={concept}, diff={discrepancy})"
@@ -952,7 +1080,8 @@ async def lookup_direct_fact(claim) -> ValidationResult:
             result.confidence = confidence
             result.actual_value = _format_value(actual_val)
             result.discrepancy = discrepancy
-            result.filing_source = f"SEC EDGAR XBRL — {concept}, period ending {actual_period}"
+            _form_label = "10-Q" if _quarterly_period else "10-K"
+            result.filing_source = f"SEC EDGAR XBRL ({_form_label}) — {concept}, {actual_period}"
             result.cik = cik
             result.accession_number = accn or None
             result.filing_date = filed or None

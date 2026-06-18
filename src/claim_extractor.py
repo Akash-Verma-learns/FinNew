@@ -51,7 +51,9 @@ PERIOD RULES (critical — wrong period causes false contradictions):
 - Look for the document's reporting year first. A shareholder/CEO letter signed in mid-2025 or later that discusses "this year's" financials is reporting on the most recently completed fiscal year (e.g., "FY2025" for a company with June fiscal year end).
 - Set period to the FISCAL YEAR the financial metric belongs to, not a calendar year that appears nearby in the text for a different purpose (e.g., "34 gigawatts in 2024" refers to the environmental metric for 2024, not to revenue).
 - For core P&L line items (revenue, operating income, net income, EPS) with no explicit year stated: use the fiscal year of the document's primary reporting period.
-- period format: "FY2025", "FY2024", etc. — NEVER just "2025" or "2024" without the "FY" prefix for financial results.
+- QUARTERLY period format: If the text explicitly mentions a quarter (Q1, Q2, Q3, Q4, "first quarter", "second quarter", "third quarter", "fourth quarter"), you MUST include the quarter in the period field. Use format "Q1 FY2024", "Q2 FY2024", etc. NEVER collapse "Q1 FY2024" to just "FY2024" — that causes quarterly values to be compared against annual totals and produces false contradictions.
+  Examples: "Q1 FY2024 revenue of $119.58B" → period="Q1 FY2024"; "second quarter net income" → period="Q2 FY2024"; "in the first quarter of fiscal 2024" → period="Q1 FY2024"
+- ANNUAL period format: "FY2025", "FY2024", etc. — NEVER just "2025" or "2024" without the "FY" prefix for annual financial results.
 
 Return ONLY a JSON array (no markdown, no explanation). Each item:
 - id: string (e.g. "claim_1")
@@ -61,7 +63,7 @@ Return ONLY a JSON array (no markdown, no explanation). Each item:
 - ticker: string or null — ALWAYS include the exchange prefix for non-US stocks (e.g. "TSX:CJT", "WSE:DOM", "LSE:VOD", "ASX:BHP"). For US stocks use plain ticker (e.g. "AAPL"). Never omit the exchange prefix for non-US companies.
 - metric: string or null — full qualifier required for segment/product metrics (see rule 5)
 - value: string or null (e.g. "$168.9 billion", "$391B", "46.2%", "29x")
-- period: string or null (e.g. "FY2025", "FY2024") — use fiscal year format
+- period: string or null — "Q1 FY2024" for quarterly, "FY2024" for annual. NEVER strip the quarter prefix from a quarterly metric.
 - checkable: boolean (true if the claim contains a specific numeric value that could be confirmed or refuted against an authoritative source; false if no numeric value, or if the value is a vague superlative like "world's first" or "10x" with no independent reference)
 
 Example for a table row "| Revenue | 394.3 | 383.3 | 391.0 |":
@@ -109,6 +111,27 @@ def _all_numbers_in_text(text: str) -> list[tuple[float, str]]:
 
 
 _YEAR_RE = re.compile(r"^(?:19|20)\d{2}$")
+
+
+def _is_product_or_temporal_extraction(value_str: str, raw_text: str) -> bool:
+    """Return True when a bare integer value was extracted from a product name or temporal phrase.
+
+    Targets patterns the LLM is supposed to skip (prompt rule 5) but occasionally violates:
+      - Hyphenated product names: "Majorana-1", "GPT-4", "Level-2"
+      - Capitalized-word + number: "Microsoft 365", "Windows 11", "Office 365"
+      - Temporal context: "in 10 years", "over 5 years"
+    """
+    digits = re.sub(r"[,\s]", "", value_str or "").strip()
+    if not re.fullmatch(r"\d+", digits) or not raw_text:
+        return False
+    n = re.escape(digits)
+    return bool(re.search(
+        rf'\b\w+-{n}\b'                                         # "Majorana-1", "GPT-4"
+        rf'|\b{n}-\w+\b'                                        # "2-factor"
+        rf'|\b[A-Z][a-z]\w*(?:\s+[A-Z][a-z]\w*)*\s+{n}\b'     # "Microsoft 365", "Windows 11"
+        rf'|\b{n}\s+(?:year|month|day|week|decade)s?\b',       # "10 years"
+        raw_text, re.IGNORECASE
+    ))
 
 
 def _looks_like_year(raw: str) -> bool:
@@ -275,12 +298,22 @@ def _backfill_primary_ticker(claims: list[Claim]) -> list[Claim]:
         return claims
 
     primary = counts.most_common(1)[0][0]
+
+    # Use the most common company name (not the ticker string) so Tavily queries
+    # say "Microsoft" instead of "MSFT".
+    company_counts = Counter(
+        c.company.strip()
+        for c in claims
+        if c.company and c.company.strip() and c.company.strip().upper() != c.ticker
+    )
+    primary_company = company_counts.most_common(1)[0][0] if company_counts else primary
+
     backfilled = 0
     for c in claims:
         if not c.ticker or not c.ticker.strip():
             c.ticker = primary
             if not c.company:
-                c.company = primary
+                c.company = primary_company
             backfilled += 1
     if backfilled:
         logger.info("[extractor] backfilled ticker=%s onto %d/%d claim(s) lacking a per-sentence company tag",
@@ -322,12 +355,13 @@ def _sanitize(claims: list[Claim], original_text: str = "") -> list[Claim]:
                 # Bare multiplier ratio ("10x", "2x") — no absolute reference point.
                 c.checkable = False
             elif c.type == ClaimType.QUALITATIVE and parsed is not None and not has_pct:
-                # For QUALITATIVE claims: if the value is a bare integer with no units
-                # (no $, B, M, million, billion, %, hours, employees, etc.), it's
-                # likely extracted from a product name ("Majorana-1" → "1",
-                # "Microsoft 365" → "365") rather than a standalone figure.
+                # For QUALITATIVE claims with a bare integer value (no units):
+                # only mark non-checkable when it looks like a product name / temporal
+                # extraction ("Majorana-1" → "1", "Microsoft 365" → "365", "10 years" → "10").
+                # Legitimate count metrics ("34,000 engineers", "25,000 customers") stay
+                # checkable so the grounding pass can still promote them.
                 units_remain = re.sub(r"[\d,.\s]+", "", val).strip()
-                if not units_remain:
+                if not units_remain and _is_product_or_temporal_extraction(val, c.raw_text or ""):
                     c.checkable = False
 
     # Drop pure-noise claims that have no verification signal:
@@ -346,6 +380,12 @@ def _sanitize(claims: list[Claim], original_text: str = "") -> list[Claim]:
             c.type == ClaimType.QUALITATIVE and not c.value
         ) and not (
             not c.metric and not c.value
+        ) and not (
+            # Drop QUALITATIVE claims where the value is a product-name or temporal
+            # number extraction ("Majorana-1"→"1", "Microsoft 365"→"365", "10 years"→"10").
+            c.type == ClaimType.QUALITATIVE
+            and c.value
+            and _is_product_or_temporal_extraction(c.value, c.raw_text or "")
         )
     ]
     if before != len(claims):

@@ -235,6 +235,14 @@ def _build_default_graph() -> FormulaGraph:
          lambda v: v["NetIncomeLoss"] / v["Assets"] * 100,
          "NetIncome ÷ TotalAssets × 100")
 
+    _reg("FCFMarginPct", ["FreeCashFlow", "Revenues"],
+         lambda v: v["FreeCashFlow"] / v["Revenues"] * 100,
+         "FreeCashFlow ÷ Revenues × 100")
+
+    _reg("ROIC", ["OperatingIncomeLoss", "LongTermDebt", "StockholdersEquity"],
+         lambda v: v["OperatingIncomeLoss"] * 0.80 / max(abs(v["LongTermDebt"] + v["StockholdersEquity"]), 1) * 100,
+         "NOPAT(est.) ÷ InvestedCapital × 100  [NOPAT ≈ OperatingIncome × 0.80]")
+
     return g
 
 

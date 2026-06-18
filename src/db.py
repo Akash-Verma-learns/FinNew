@@ -58,6 +58,22 @@ class _Collections:
     def segment_facts(self) -> AsyncIOMotorCollection:
         return _db["segment_facts"]
 
+    @property
+    def credibility_history(self) -> AsyncIOMotorCollection:
+        return _db["credibility_history"]
+
+    @property
+    def trend_insights(self) -> AsyncIOMotorCollection:
+        return _db["trend_insights"]
+
+    @property
+    def audit_logs(self) -> AsyncIOMotorCollection:
+        return _db["audit_logs"]
+
+    @property
+    def feedback_signals(self) -> AsyncIOMotorCollection:
+        return _db["feedback_signals"]
+
 
 collections = _Collections()
 
@@ -72,14 +88,27 @@ async def init_db() -> None:
     global _client, _db
     uri = os.getenv("MONGODB_URI", "mongodb://localhost:27017")
     db_name = os.getenv("MONGODB_DB", "finvalidator")
-    try:
-        import certifi
-        tls_ca = certifi.where()
-    except ImportError:
-        tls_ca = None
-    kwargs: dict = {"serverSelectionTimeoutMS": 5000, "tls": True}
-    if tls_ca:
-        kwargs["tlsCAFile"] = tls_ca
+
+    kwargs: dict = {"serverSelectionTimeoutMS": 5000}
+
+    is_atlas = "mongodb+srv" in uri or ".mongodb.net" in uri
+    if is_atlas:
+        # Windows Python 3.12 + OpenSSL fails the Atlas certificate chain handshake
+        # with TLSV1_ALERT_INTERNAL_ERROR even with certifi. Bypass cert validation
+        # for the dev environment; set MONGODB_TLS_VERIFY=true to re-enable.
+        if os.getenv("MONGODB_TLS_VERIFY", "false").lower() in ("true", "1"):
+            try:
+                import certifi
+                kwargs["tlsCAFile"] = certifi.where()
+            except ImportError:
+                pass
+        else:
+            kwargs["tlsAllowInvalidCertificates"] = True
+    else:
+        # Local / non-Atlas — honour explicit TLS env var, default off
+        if os.getenv("MONGODB_TLS", "").lower() in ("true", "1"):
+            kwargs["tls"] = True
+
     _client = AsyncIOMotorClient(uri, **kwargs)
     _db = _client[db_name]
     await _ensure_indexes()
@@ -134,6 +163,31 @@ async def _ensure_indexes() -> None:
     await collections.segment_facts.create_indexes([
         IndexModel([("cik", ASCENDING), ("period_end", DESCENDING), ("segment_name", ASCENDING), ("metric", ASCENDING)]),
         IndexModel([("cik", ASCENDING), ("metric", ASCENDING)]),
+    ])
+
+    # credibility_history — one snapshot per pipeline run per ticker
+    await collections.credibility_history.create_indexes([
+        IndexModel([("ticker", ASCENDING), ("timestamp", DESCENDING)], name="ticker_timestamp_desc"),
+        IndexModel([("run_id", ASCENDING)], unique=True),
+    ])
+
+    # trend_insights — cached trend outputs per ticker
+    await collections.trend_insights.create_indexes([
+        IndexModel([("ticker", ASCENDING), ("generated_at", DESCENDING)], name="ticker_generated_desc"),
+    ])
+
+    # audit_logs — immutable execution trace per validation run (Layer 6)
+    await collections.audit_logs.create_indexes([
+        IndexModel([("validation_id", ASCENDING)], unique=True, name="validation_id_unique"),
+        IndexModel([("created_at", DESCENDING)], name="audit_created_desc"),
+        IndexModel([("ticker", ASCENDING), ("created_at", DESCENDING)], name="audit_ticker_created"),
+    ])
+
+    # feedback_signals — analyst feedback on validation outputs (Layer 6)
+    await collections.feedback_signals.create_indexes([
+        IndexModel([("validation_id", ASCENDING), ("claim_id", ASCENDING)], name="feedback_validation_claim"),
+        IndexModel([("created_at", DESCENDING)], name="feedback_created_desc"),
+        IndexModel([("feedback_type", ASCENDING), ("feedback_value", ASCENDING)], name="feedback_type_value"),
     ])
 
     logger.info("MongoDB indexes ensured")
