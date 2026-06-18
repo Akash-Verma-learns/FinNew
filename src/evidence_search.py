@@ -15,13 +15,16 @@ _TAVILY_SEM = asyncio.Semaphore(10)
 TAVILY_URL = "https://api.tavily.com/search"
 
 DOMAIN_MAP: dict[str, list[str]] = {
-    "DIRECT_FACT": ["sec.gov", "finance.yahoo.com", "reuters.com"],
-    "DERIVED_METRIC": ["sec.gov", "finance.yahoo.com", "macrotrends.net"],
+    # businesswire/prnewswire carry earnings press releases with exact segment figures
+    # (Azure, Intelligent Cloud, etc.) that sec.gov XBRL doesn't expose separately.
+    "DIRECT_FACT": ["sec.gov", "businesswire.com", "prnewswire.com", "finance.yahoo.com"],
+    "DERIVED_METRIC": ["businesswire.com", "prnewswire.com", "finance.yahoo.com", "macrotrends.net"],
     "ACCOUNTING_POLICY": ["sec.gov"],
     "MODEL_ASSUMPTION": ["finance.yahoo.com", "wsj.com", "reuters.com", "marketwatch.com"],
-    "FORWARD_PROJECTION": ["finance.yahoo.com", "wsj.com", "reuters.com"],
+    "FORWARD_PROJECTION": ["businesswire.com", "prnewswire.com", "finance.yahoo.com", "wsj.com"],
     "RECOMMENDATION": ["finance.yahoo.com", "wsj.com", "reuters.com", "marketwatch.com"],
-    "QUALITATIVE": ["reuters.com", "wsj.com", "marketwatch.com", "businesswire.com"],
+    # finance.yahoo.com surfaces product metrics from earnings calls/press releases
+    "QUALITATIVE": ["businesswire.com", "prnewswire.com", "finance.yahoo.com", "reuters.com"],
 }
 
 # Domains for non-US companies — avoid sec.gov, use broader financial data sources
@@ -63,13 +66,14 @@ _EXCHANGE_DOMAINS: dict[str, dict[str, list[str]]] = {
 }
 
 QUERY_TEMPLATES: dict[str, str] = {
-    "DIRECT_FACT": "{company} {ticker} {metric} {period} 10-K SEC annual report",
-    "DERIVED_METRIC": "{company} {ticker} {metric} {period} annual",
+    # earnings press releases use "quarterly results" and report exact segment figures
+    "DIRECT_FACT": "{company} {ticker} {metric} {period} quarterly results earnings",
+    "DERIVED_METRIC": "{company} {ticker} {metric} {period} quarterly results earnings",
     "ACCOUNTING_POLICY": "{company} {ticker} accounting policy {metric} 10-K SEC",
     "MODEL_ASSUMPTION": "{company} {ticker} {metric} consensus analyst estimate {period}",
-    "FORWARD_PROJECTION": "{company} {ticker} {metric} guidance forecast {period}",
+    "FORWARD_PROJECTION": "{company} {ticker} {metric} announcement {period}",
     "RECOMMENDATION": "{company} {ticker} analyst rating price target",
-    "QUALITATIVE": "{company} {metric}",
+    "QUALITATIVE": "{company} {metric} {period}",
 }
 
 # Versions without the "10-K SEC" framing — used for non-US companies
