@@ -844,6 +844,92 @@ async def get_ticker_recommendation(ticker: str):
         raise HTTPException(status_code=500, detail=str(exc))
 
 
+@app.get("/demo")
+async def serve_demo():
+    """Serves the public one-liner claim validator demo page."""
+    from pathlib import Path
+    from fastapi.responses import FileResponse
+    p = Path(__file__).parent.parent / "demo.html"
+    if not p.exists():
+        raise HTTPException(status_code=404, detail="demo.html not found")
+    return FileResponse(p, media_type="text/html")
+
+
+class OneLinerRequest(BaseModel):
+    claim: str
+    ticker: str | None = None
+
+
+@app.post("/api/validate-one-liner")
+async def validate_one_liner(req: OneLinerRequest):
+    """
+    Validate a single financial claim (up to 500 chars) through the full pipeline.
+    Uses Groq when hosted (OLLAMA_BASE_URL not set), Ollama locally.
+    """
+    claim_text = req.claim.strip()
+    if not claim_text:
+        raise HTTPException(status_code=400, detail="claim is required")
+    if len(claim_text) > 500:
+        raise HTTPException(status_code=400, detail="claim must be 500 characters or fewer")
+
+    try:
+        from .claim_extractor import extract_claims
+        from .validator import validate_claim
+
+        # Prepend ticker hint so extraction can tag claims correctly
+        text = claim_text
+        if req.ticker:
+            text = f"[{req.ticker.strip().upper()}] {claim_text}"
+
+        claims = await extract_claims(text)
+        if not claims:
+            return {
+                "input": claim_text,
+                "ticker": req.ticker,
+                "claims_extracted": 0,
+                "results": [],
+                "message": "No verifiable claim detected. Try including a specific number and company name.",
+            }
+
+        # Validate all extracted claims (usually 1–3 for a one-liner)
+        import asyncio as _asyncio
+        raw_results = await _asyncio.gather(*[validate_claim(c) for c in claims], return_exceptions=True)
+
+        results = []
+        for claim, res in zip(claims, raw_results):
+            if isinstance(res, Exception):
+                continue
+            results.append({
+                "claim_text":   claim.raw_text,
+                "type":         claim.type.value,
+                "metric":       claim.metric,
+                "value":        claim.value,
+                "period":       claim.period,
+                "ticker":       claim.ticker,
+                "checkable":    claim.checkable,
+                "verdict":      res.status.value,
+                "confidence":   round(res.confidence, 2),
+                "actual_value": res.actual_value,
+                "discrepancy":  res.discrepancy,
+                "reasoning":    res.reasoning,
+                "source":       res.filing_source or "web search",
+                "edgar_url":    res.edgar_url,
+                "citations":    res.citations[:3],
+            })
+
+        return {
+            "input":             claim_text,
+            "ticker":            req.ticker,
+            "claims_extracted":  len(claims),
+            "results":           results,
+            "backend":           "ollama" if os.getenv("OLLAMA_BASE_URL") else "groq",
+        }
+
+    except Exception as exc:
+        logger.error("validate-one-liner error: %s", exc)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
 @app.get("/dashboard")
 async def serve_dashboard():
     """Serves the standalone stock analysis dashboard HTML."""
