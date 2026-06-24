@@ -26,16 +26,21 @@ from .validator import clear_validation_cache, validate_claim
 
 
 @asynccontextmanager
+async def _bg_load_model() -> None:
+    try:
+        await asyncio.get_event_loop().run_in_executor(None, load_embedding_model)
+        logger.info("Embedding model ready")
+    except Exception as exc:
+        logger.warning("Embedding model failed to load: %s", exc)
+
+
 async def lifespan(app: FastAPI):
     logger.info("FinValidator v4.0 starting on port %s", os.getenv("PORT", "8000"))
     try:
         await init_db()
     except Exception as exc:
         logger.warning("MongoDB unavailable — running without DB cache: %s", exc)
-    try:
-        await asyncio.get_event_loop().run_in_executor(None, load_embedding_model)
-    except Exception as exc:
-        logger.warning("Embedding model failed to load: %s", exc)
+    asyncio.create_task(_bg_load_model())
     yield
     await close_db()
     logger.info("FinValidator shutting down")
