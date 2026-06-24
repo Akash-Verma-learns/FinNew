@@ -25,7 +25,6 @@ from .scorer import score_report
 from .validator import clear_validation_cache, validate_claim
 
 
-@asynccontextmanager
 async def _bg_load_model() -> None:
     try:
         await asyncio.get_event_loop().run_in_executor(None, load_embedding_model)
@@ -34,6 +33,7 @@ async def _bg_load_model() -> None:
         logger.warning("Embedding model failed to load: %s", exc)
 
 
+@asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("FinValidator v4.0 starting on port %s", os.getenv("PORT", "8000"))
     try:
