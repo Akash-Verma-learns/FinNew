@@ -17,14 +17,14 @@ T = TypeVar("T", bound=BaseModel)
 # Backend selection — Ollama takes priority over Groq when configured
 # ---------------------------------------------------------------------------
 _OLLAMA_BASE = os.getenv("OLLAMA_BASE_URL", "").rstrip("/")
-_OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2")
+_OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen3:8b")
 _GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
 
 # Local Ollama: no rate limit, no API key required
 USE_OLLAMA = bool(_OLLAMA_BASE)
 
-# Groq free-tier: ~22s between requests at 12k TPM
-MIN_GAP_SECONDS = 22.0
+# Groq free-tier: 6000 TPM ≈ 4s gap at ~400 tokens/call
+MIN_GAP_SECONDS = 4.0
 
 # Ollama: GPU is single-threaded per model load — more than 4 concurrent
 # requests just queue inside Ollama with no throughput gain and high memory cost.
@@ -97,7 +97,7 @@ async def _call_ollama(content: str) -> str:
     }
     logger.info("  [ollama] POST %s/api/chat model=%s prompt=%d chars", _OLLAMA_BASE, _OLLAMA_MODEL, len(content))
     async with _get_ollama_sem():
-        async with httpx.AsyncClient(timeout=120.0) as client:
+        async with httpx.AsyncClient(timeout=600.0) as client:
             resp = await client.post(url, json=payload)
             resp.raise_for_status()
             data = resp.json()
@@ -107,7 +107,7 @@ async def _call_ollama(content: str) -> str:
 
 
 async def _call_groq(content: str) -> str:
-    """Call Groq with 22-second rate-limit enforcement (free-tier TPM gap)."""
+    """Call Groq with rate-limit enforcement (free-tier: 6000 TPM → ~4s gap)."""
     global _last_call_time
     async with _get_lock():
         elapsed = time.monotonic() - _last_call_time

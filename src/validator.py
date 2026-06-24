@@ -74,6 +74,7 @@ VERIFIED (confidence 0.85-1.0): Use VERIFIED when the evidence confirms the clai
 PARTIALLY_VERIFIED (confidence 0.55-0.79): Evidence is about the same company and same metric but the specific number is MATERIALLY different (>15% off) from what is stated, OR refers to a meaningfully different time period with no equivalent current-period data available.
 
 CONTRADICTED (confidence 0.85-1.0): ONLY use this when evidence from the SAME period explicitly states a MATERIALLY DIFFERENT value (>15% off) for the identical metric and company. Do NOT use CONTRADICTED for minor rounding differences, different-period comparisons, or when evidence uses approximate language. When in doubt between CONTRADICTED and PARTIALLY_VERIFIED, choose PARTIALLY_VERIFIED.
+  MANDATORY quarterly period matching rule: If the claim has a quarterly period (contains Q1/Q2/Q3/Q4 or "first/second/third/fourth quarter"), you MUST explicitly identify the quarter in the evidence before returning CONTRADICTED. If the evidence mentions a DIFFERENT quarter (even from the same company in the same fiscal year), return UNVERIFIABLE — different quarters ALWAYS have different revenue/earnings, so they cannot contradict each other. For example: a claim of "Q1 FY2024 revenue $119.6B" CANNOT be CONTRADICTED by evidence of "Q2 FY2024 revenue $90.8B" — the quarters differ and different-quarter results are expected to differ. CONTRADICTED requires the evidence and claim to reference the IDENTICAL quarter-year combination.
 
 UNVERIFIABLE (confidence 0.0): Evidence is about a different company, a completely different metric/activity, or a non-comparable time period (e.g., a decade-old statistic for a "this year" claim). Use UNVERIFIABLE only when the evidence cannot speak to the claim at all.
 
@@ -592,6 +593,87 @@ async def validate_claim(claim: Claim) -> ValidationResult:
     else:
         logger.info("[validate] claim=%s type=%s — routing to web-search", claim.id, claim.type)
         result = await _search_and_reason(claim)
+
+    # QUALITATIVE claims (MAU, subscriber counts, product metrics) are non-GAAP
+    # operational figures that vary by scope, period, and source methodology.
+    # A web search finding a different number from a different period or scope
+    # is NOT a definitive contradiction — cap at PARTIALLY_VERIFIED.
+    if result.status == ValidationStatus.CONTRADICTED and claim.type == ClaimType.QUALITATIVE:
+        result.status = ValidationStatus.PARTIALLY_VERIFIED
+        result.confidence = min(result.confidence, 0.60)
+        result.reasoning = (result.reasoning or "").rstrip(".") + ". Non-GAAP product metric; conflicting source may reflect different scope or period — capped at PARTIALLY_VERIFIED."
+        logger.info("  [%s] qualitative cap: CONTRADICTED → PARTIALLY_VERIFIED (conf=%.2f)", claim.id, result.confidence)
+
+    # Quarterly DIRECT_FACT/DERIVED_METRIC claims frequently trigger false
+    # CONTRADICTEDs: web search returns a different quarter's results and the LLM
+    # treats them as a same-period contradiction. Guard: parse both values once,
+    # classify into three zones:
+    #   < 2×   → normal quarter-to-quarter variance → cap to PARTIALLY_VERIFIED
+    #   2–10×  → too large for quarter variance, plausible fraud range → keep CONTRADICTED
+    #   > 10×  → Tavily found a completely different metric (e.g. $3.9B for iPhone
+    #             revenue is clearly wrong data) → irrelevant evidence, cap
+    import re as _re
+    if (
+        result.status == ValidationStatus.CONTRADICTED
+        and claim.type in (ClaimType.DIRECT_FACT, ClaimType.DERIVED_METRIC)
+        and claim.period
+        and _re.search(r"\bQ[1-4]\b|\b(first|second|third|fourth)\s+quarter\b",
+                       str(claim.period), _re.IGNORECASE)
+    ):
+        _ratio: float | None = None
+        if result.actual_value and claim.value:
+            try:
+                def _pv(s: str) -> float | None:
+                    s = str(s).lower().replace(",", "")
+                    m = _re.search(r"([\d.]+)\s*([tb])", s)
+                    if m:
+                        v = float(m.group(1))
+                        return v * (1_000_000_000_000 if m.group(2) == "t" else 1_000_000_000)
+                    m = _re.search(r"[\d.]+", s)
+                    return float(m.group()) if m else None
+                _av, _cv = _pv(result.actual_value), _pv(claim.value)
+                if _av and _cv and _av > 0 and _cv > 0:
+                    _ratio = max(_av, _cv) / min(_av, _cv)
+            except Exception:
+                pass
+
+        _in_fraud_range = _ratio is not None and 2.0 < _ratio < 10.0
+        if not _in_fraud_range:
+            # Grade confidence by magnitude match:
+            # ≤1.5× → different quarter, same ballpark → 0.75
+            # >1.5× or no comparison → more uncertain → 0.70
+            _qcap_conf = 0.75 if (_ratio is not None and _ratio <= 1.5) else 0.70
+            result.status = ValidationStatus.PARTIALLY_VERIFIED
+            result.confidence = min(result.confidence, _qcap_conf)
+            result.reasoning = (result.reasoning or "").rstrip(".") + ". Quarterly claim — evidence may cover a different quarter; different quarters always differ. Capped at PARTIALLY_VERIFIED."
+            logger.info("  [%s] quarterly cap: CONTRADICTED → PARTIALLY_VERIFIED (conf=%.2f, ratio=%s)",
+                        claim.id, result.confidence, f"{_ratio:.1f}×" if _ratio else "n/a")
+
+    # Grounding pass: if all sources exhausted with UNVERIFIABLE and the claim is
+    # from the company's own official document (has a ticker), no contradicting
+    # evidence was found — treat it as grounded rather than uncertain.
+    # "Couldn't verify" ≠ "wrong" for a company's own disclosures.
+    _GROUNDING_CONFIDENCE = {
+        ClaimType.DIRECT_FACT:        0.75,
+        ClaimType.DERIVED_METRIC:     0.74,
+        ClaimType.QUALITATIVE:        0.68,
+        ClaimType.FORWARD_PROJECTION: 0.65,
+        ClaimType.ACCOUNTING_POLICY:  0.63,
+    }
+    if (
+        result.status == ValidationStatus.UNVERIFIABLE
+        and claim.ticker
+        and claim.checkable
+        and claim.type in _GROUNDING_CONFIDENCE
+    ):
+        conf = _GROUNDING_CONFIDENCE[claim.type]
+        result.status = ValidationStatus.PARTIALLY_VERIFIED
+        result.confidence = conf
+        result.reasoning = (
+            (result.reasoning.rstrip(".") + ". " if result.reasoning else "")
+            + "No contradicting evidence found; official source statement treated as grounded."
+        )
+        logger.info("  [%s] grounding pass: UNVERIFIABLE → PARTIALLY_VERIFIED (conf=%.2f)", claim.id, conf)
 
     _validation_cache[key] = result
     return result

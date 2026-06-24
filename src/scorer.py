@@ -16,10 +16,10 @@ CLAIM_WEIGHTS: dict[str, float] = {
 STATUS_SCORES: dict[ValidationStatus, float] = {
     ValidationStatus.VERIFIED: 1.0,
     ValidationStatus.PARTIALLY_VERIFIED: 0.75,
-    ValidationStatus.UNVERIFIABLE: 0.5,
+    ValidationStatus.UNVERIFIABLE: 0.70,   # "couldn't check" ≠ "probably wrong"
     ValidationStatus.CONTRADICTED: 0.0,
-    ValidationStatus.NOT_APPLICABLE: 0.5,
-    ValidationStatus.ERROR: 0.4,
+    ValidationStatus.NOT_APPLICABLE: 0.70,
+    ValidationStatus.ERROR: 0.5,
 }
 
 CASCADE_DEPS: dict[str, list[str]] = {
@@ -52,7 +52,7 @@ def score_report(
             continue
         weight = CLAIM_WEIGHTS.get(claim.type, 0.5)
         status_score = STATUS_SCORES.get(v.status, 0.5)
-        confidence = max(v.confidence, 0.5) if v.status == ValidationStatus.UNVERIFIABLE else v.confidence
+        confidence = max(v.confidence, 0.65) if v.status == ValidationStatus.UNVERIFIABLE else v.confidence
         contribution = weight * status_score * confidence
         weighted_sum += contribution
         total_weight += weight
@@ -96,14 +96,45 @@ def score_report(
     verified = sum(1 for v in validations.values() if v.status == ValidationStatus.VERIFIED)
     contradicted = sum(1 for v in validations.values() if v.status == ValidationStatus.CONTRADICTED)
 
-    if final_score >= 80:
-        rating = "HIGH"
-    elif final_score >= 60:
-        rating = "MODERATE"
-    elif final_score >= 40:
-        rating = "LOW"
+    # Determine what fraction of checkable claims are inherently unverifiable types
+    # (QUALITATIVE = ESG/product metrics, FORWARD_PROJECTION = guidance/targets).
+    # When these dominate the document, the score reflects verifiability of claim types,
+    # not document accuracy — adjust thresholds and surface an explanatory note.
+    checkable_claims = [c for c in claims if c.checkable]
+    unverifiable_types = {ClaimType.QUALITATIVE, ClaimType.FORWARD_PROJECTION}
+    unverifiable_count = sum(1 for c in checkable_claims if c.type in unverifiable_types)
+    unverifiable_fraction = unverifiable_count / len(checkable_claims) if checkable_claims else 0.0
+
+    # For documents dominated by unverifiable claims, use relaxed rating thresholds:
+    # the evidence infrastructure (XBRL, SEC filings) simply cannot confirm ESG targets
+    # or forward projections — a "LOW" rating on such a document is misleading.
+    if unverifiable_fraction >= 0.7:
+        if final_score >= 65:
+            rating = "HIGH"
+        elif final_score >= 48:
+            rating = "MODERATE"
+        elif final_score >= 32:
+            rating = "LOW"
+        else:
+            rating = "VERY LOW"
     else:
-        rating = "VERY LOW"
+        if final_score >= 80:
+            rating = "HIGH"
+        elif final_score >= 60:
+            rating = "MODERATE"
+        elif final_score >= 40:
+            rating = "LOW"
+        else:
+            rating = "VERY LOW"
+
+    verifiability_note: str | None = None
+    if unverifiable_fraction >= 0.7:
+        verifiability_note = (
+            f"{unverifiable_count} of {len(checkable_claims)} checkable claims are "
+            f"inherently unverifiable types (ESG targets, forward projections, product metrics). "
+            f"Score reflects claim verifiability, not document accuracy — "
+            f"no evidence infrastructure exists to confirm or deny these claims."
+        )
 
     return {
         "overall_score": round(final_score, 1),
@@ -115,4 +146,5 @@ def score_report(
         "verified_count": verified,
         "contradicted_count": contradicted,
         "claim_count": len(claims),
+        "verifiability_note": verifiability_note,
     }
