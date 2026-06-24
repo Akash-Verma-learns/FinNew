@@ -111,8 +111,14 @@ async def init_db() -> None:
 
     _client = AsyncIOMotorClient(uri, **kwargs)
     _db = _client[db_name]
-    await _ensure_indexes()
-    logger.info("MongoDB connected — db=%s uri=%s", db_name, uri.split("@")[-1])
+    try:
+        await _ensure_indexes()
+        logger.info("MongoDB connected — db=%s uri=%s", db_name, uri.split("@")[-1])
+    except Exception:
+        _client.close()
+        _client = None
+        _db = None
+        raise
 
 
 async def close_db() -> None:
