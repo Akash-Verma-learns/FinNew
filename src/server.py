@@ -860,6 +860,17 @@ async def serve_demo():
     return FileResponse(p, media_type="text/html")
 
 
+@app.get("/presentation")
+async def serve_presentation():
+    """Serves the CEO demo presentation."""
+    from pathlib import Path
+    from fastapi.responses import FileResponse
+    p = Path(__file__).parent.parent / "presentation.html"
+    if not p.exists():
+        raise HTTPException(status_code=404, detail="presentation.html not found")
+    return FileResponse(p, media_type="text/html")
+
+
 class OneLinerRequest(BaseModel):
     claim: str
     ticker: str | None = None
