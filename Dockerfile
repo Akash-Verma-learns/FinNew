@@ -18,7 +18,6 @@ RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTr
 COPY src/ ./src/
 COPY demo.html .
 COPY presentation.html .
-COPY .env.example .
 
 EXPOSE 8000
 

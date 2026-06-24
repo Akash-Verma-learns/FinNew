@@ -1,0 +1,694 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>FinValidator — CEO Demo</title>
+<style>
+  :root {
+    --bg: #0a0f1e;
+    --card: #111827;
+    --border: #1e293b;
+    --blue: #3b82f6;
+    --green: #22c55e;
+    --amber: #f59e0b;
+    --red: #ef4444;
+    --purple: #a855f7;
+    --cyan: #06b6d4;
+    --text: #e2e8f0;
+    --muted: #64748b;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { background:var(--bg); color:var(--text); font-family:'Segoe UI',system-ui,sans-serif; overflow:hidden; }
+
+  /* ── SLIDE SYSTEM ─────────────────────────────────────── */
+  .slide { display:none; width:100vw; height:100vh; padding:48px 64px; flex-direction:column; justify-content:flex-start; animation:fadeIn .4s ease; }
+  .slide.active { display:flex; }
+  @keyframes fadeIn { from{opacity:0;transform:translateY(12px)} to{opacity:1;transform:none} }
+
+  /* ── NAV ──────────────────────────────────────────────── */
+  .nav { position:fixed; bottom:28px; left:50%; transform:translateX(-50%); display:flex; gap:10px; z-index:100; }
+  .nav button { background:var(--border); border:1px solid #2d3f55; color:var(--text); padding:8px 22px; border-radius:6px; cursor:pointer; font-size:14px; transition:.15s; }
+  .nav button:hover { background:#1e293b; border-color:var(--blue); }
+  .nav .dots { display:flex; gap:6px; align-items:center; }
+  .dot { width:7px; height:7px; border-radius:50%; background:var(--border); cursor:pointer; transition:.2s; }
+  .dot.active { background:var(--blue); }
+  .slide-num { position:fixed; top:24px; right:40px; font-size:12px; color:var(--muted); }
+
+  /* ── TYPOGRAPHY ───────────────────────────────────────── */
+  .tag { display:inline-block; font-size:11px; font-weight:600; letter-spacing:.08em; text-transform:uppercase; color:var(--blue); background:rgba(59,130,246,.12); border:1px solid rgba(59,130,246,.25); padding:3px 10px; border-radius:4px; margin-bottom:14px; }
+  h1 { font-size:48px; font-weight:700; line-height:1.15; }
+  h2 { font-size:32px; font-weight:700; margin-bottom:6px; }
+  .sub { font-size:17px; color:var(--muted); margin-top:8px; max-width:680px; line-height:1.6; }
+  .section-title { font-size:13px; font-weight:600; letter-spacing:.1em; text-transform:uppercase; color:var(--muted); margin-bottom:20px; }
+
+  /* ── CARDS ────────────────────────────────────────────── */
+  .card { background:var(--card); border:1px solid var(--border); border-radius:12px; padding:22px 24px; }
+  .card-sm { background:var(--card); border:1px solid var(--border); border-radius:10px; padding:16px 18px; }
+  .grid-2 { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+  .grid-3 { display:grid; grid-template-columns:1fr 1fr 1fr; gap:16px; }
+  .grid-4 { display:grid; grid-template-columns:repeat(4,1fr); gap:14px; }
+  .grid-5 { display:grid; grid-template-columns:repeat(5,1fr); gap:12px; }
+
+  /* ── FLOW DIAGRAM ─────────────────────────────────────── */
+  .flow { display:flex; align-items:center; gap:0; flex-wrap:nowrap; overflow-x:auto; }
+  .flow-node { flex-shrink:0; background:var(--card); border:1px solid var(--border); border-radius:10px; padding:14px 16px; text-align:center; min-width:110px; position:relative; }
+  .flow-node .icon { font-size:24px; margin-bottom:6px; }
+  .flow-node .label { font-size:12px; font-weight:600; color:var(--text); }
+  .flow-node .tech { font-size:10px; color:var(--blue); margin-top:3px; }
+  .flow-arrow { flex-shrink:0; color:var(--muted); font-size:20px; padding:0 6px; }
+
+  /* ── BADGE ────────────────────────────────────────────── */
+  .badge { display:inline-block; font-size:11px; font-weight:600; padding:3px 10px; border-radius:20px; }
+  .badge-green  { background:rgba(34,197,94,.15);  color:var(--green);  border:1px solid rgba(34,197,94,.3); }
+  .badge-amber  { background:rgba(245,158,11,.15); color:var(--amber);  border:1px solid rgba(245,158,11,.3); }
+  .badge-red    { background:rgba(239,68,68,.15);  color:var(--red);    border:1px solid rgba(239,68,68,.3); }
+  .badge-blue   { background:rgba(59,130,246,.15); color:var(--blue);   border:1px solid rgba(59,130,246,.3); }
+  .badge-purple { background:rgba(168,85,247,.15); color:var(--purple); border:1px solid rgba(168,85,247,.3); }
+
+  /* ── PIPELINE STEPS ───────────────────────────────────── */
+  .step { display:flex; gap:16px; align-items:flex-start; margin-bottom:14px; }
+  .step-num { width:28px; height:28px; border-radius:50%; background:rgba(59,130,246,.15); border:1px solid rgba(59,130,246,.4); color:var(--blue); font-weight:700; font-size:13px; display:flex; align-items:center; justify-content:center; flex-shrink:0; }
+  .step-body .title { font-size:14px; font-weight:600; margin-bottom:2px; }
+  .step-body .desc  { font-size:12px; color:var(--muted); line-height:1.5; }
+
+  /* ── SCORE BARS ───────────────────────────────────────── */
+  .score-row { margin-bottom:10px; }
+  .score-label { font-size:12px; color:var(--muted); margin-bottom:4px; display:flex; justify-content:space-between; }
+  .bar-track { height:6px; background:var(--border); border-radius:3px; overflow:hidden; }
+  .bar-fill  { height:100%; border-radius:3px; transition:width 1s ease; }
+
+  /* ── GAUGE (SVG) ──────────────────────────────────────── */
+  .gauge-wrap { text-align:center; }
+  .gauge-wrap svg { width:90px; height:90px; }
+  .gauge-label { font-size:11px; font-weight:600; color:var(--muted); text-transform:uppercase; letter-spacing:.06em; margin-top:4px; }
+  .gauge-val { font-size:20px; font-weight:700; }
+
+  /* ── TIMELINE ─────────────────────────────────────────── */
+  .timeline { display:flex; flex-direction:column; gap:0; }
+  .tl-item { display:flex; gap:16px; position:relative; }
+  .tl-line { display:flex; flex-direction:column; align-items:center; }
+  .tl-dot  { width:10px; height:10px; border-radius:50%; background:var(--blue); flex-shrink:0; margin-top:5px; }
+  .tl-bar  { width:2px; flex:1; background:var(--border); margin-top:4px; }
+  .tl-content { padding-bottom:18px; }
+  .tl-content .title { font-size:13px; font-weight:600; }
+  .tl-content .sub   { font-size:12px; color:var(--muted); margin-top:2px; line-height:1.5; }
+
+  /* ── COVER ────────────────────────────────────────────── */
+  .cover-grid { display:grid; grid-template-columns:1fr 1fr; gap:48px; align-items:center; height:80vh; }
+  .cover-badges { display:flex; gap:8px; flex-wrap:wrap; margin-top:24px; }
+  .cover-right { display:flex; flex-direction:column; gap:14px; }
+  .stat-card { background:var(--card); border:1px solid var(--border); border-radius:10px; padding:18px 20px; }
+  .stat-card .val { font-size:28px; font-weight:700; color:var(--blue); }
+  .stat-card .lbl { font-size:12px; color:var(--muted); margin-top:2px; }
+
+  /* ── TRUTH TABLE ──────────────────────────────────────── */
+  .truth-row { display:flex; align-items:center; gap:12px; padding:10px 14px; border-radius:8px; margin-bottom:8px; }
+  .truth-row:nth-child(1) { background:rgba(34,197,94,.08); border:1px solid rgba(34,197,94,.2); }
+  .truth-row:nth-child(2) { background:rgba(59,130,246,.08); border:1px solid rgba(59,130,246,.2); }
+  .truth-row:nth-child(3) { background:rgba(245,158,11,.08); border:1px solid rgba(245,158,11,.2); }
+  .truth-row .priority { font-size:20px; font-weight:800; width:28px; }
+  .truth-row .source { font-size:13px; font-weight:600; }
+  .truth-row .detail { font-size:11px; color:var(--muted); }
+
+  .formula-box { background:rgba(59,130,246,.06); border:1px solid rgba(59,130,246,.2); border-radius:10px; padding:18px 22px; text-align:center; font-size:18px; font-weight:600; letter-spacing:.02em; margin-top:auto; }
+  .formula-box span { color:var(--blue); }
+</style>
+</head>
+<body>
+
+<!-- ═══════════════════════════════════════════════════════
+     SLIDE 1 — COVER
+══════════════════════════════════════════════════════════ -->
+<div class="slide active" id="s1">
+  <div class="cover-grid">
+    <div>
+      <div class="tag">Investor Intelligence Platform</div>
+      <h1>FinValidator</h1>
+      <p class="sub">An AI-powered system that reads financial reports, verifies every quantitative claim against ground-truth sources, and converts that into an empirical stock score — in minutes, not hours.</p>
+      <div class="cover-badges">
+        <span class="badge badge-blue">FastAPI · Python</span>
+        <span class="badge badge-blue">Ollama · qwen3:8b</span>
+        <span class="badge badge-blue">SEC EDGAR XBRL</span>
+        <span class="badge badge-blue">MongoDB Atlas</span>
+        <span class="badge badge-blue">yfinance</span>
+        <span class="badge badge-blue">Tavily Search</span>
+        <span class="badge badge-blue">React · Lovable</span>
+      </div>
+    </div>
+    <div class="cover-right">
+      <div class="stat-card">
+        <div class="val">7-step</div>
+        <div class="lbl">Validation pipeline per claim</div>
+      </div>
+      <div class="stat-card">
+        <div class="val">4-factor</div>
+        <div class="lbl">Empirical composite score (F · T · Q · M)</div>
+      </div>
+      <div class="stat-card">
+        <div class="val">3-horizon</div>
+        <div class="lbl">Short · Medium · Long term recommendations</div>
+      </div>
+      <div class="stat-card">
+        <div class="val">1 source</div>
+        <div class="lbl">SEC EDGAR XBRL as ground truth</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════
+     SLIDE 2 — OVERALL FLOW + TECH STACK
+══════════════════════════════════════════════════════════ -->
+<div class="slide" id="s2">
+  <div class="tag">Architecture</div>
+  <h2>End-to-End System Flow</h2>
+  <p class="sub" style="margin-bottom:32px;">Every layer is independently replaceable — the LLM, the data source, the frontend.</p>
+
+  <div class="flow" style="margin-bottom:28px;">
+    <div class="flow-node">
+      <div class="icon">📄</div>
+      <div class="label">Financial Report</div>
+      <div class="tech">10-K · 10-Q · PDF</div>
+    </div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-node" style="border-color:rgba(6,182,212,.4)">
+      <div class="icon">🔍</div>
+      <div class="label">Parse & Chunk</div>
+      <div class="tech">Docling (IBM)</div>
+    </div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-node" style="border-color:rgba(168,85,247,.4)">
+      <div class="icon">🧠</div>
+      <div class="label">Extract Claims</div>
+      <div class="tech">qwen3:8b (Ollama)</div>
+    </div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-node" style="border-color:rgba(59,130,246,.4)">
+      <div class="icon">⚖️</div>
+      <div class="label">Validate</div>
+      <div class="tech">EDGAR + Tavily</div>
+    </div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-node" style="border-color:rgba(245,158,11,.4)">
+      <div class="icon">📊</div>
+      <div class="label">Score Report</div>
+      <div class="tech">Credibility 0–100</div>
+    </div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-node" style="border-color:rgba(34,197,94,.4)">
+      <div class="icon">📈</div>
+      <div class="label">Stock Score</div>
+      <div class="tech">F · T · Q · M</div>
+    </div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-node" style="border-color:rgba(59,130,246,.4)">
+      <div class="icon">🖥️</div>
+      <div class="label">Dashboard</div>
+      <div class="tech">React · Lovable</div>
+    </div>
+  </div>
+
+  <div class="grid-4" style="margin-top:8px;">
+    <div class="card">
+      <div style="font-size:11px; color:var(--cyan); font-weight:700; text-transform:uppercase; letter-spacing:.08em; margin-bottom:10px;">Ingestion</div>
+      <div class="step-body"><div class="title">IBM Docling</div><div class="desc">Converts PDFs to structured markdown with section awareness — preserves tables, footnotes, segment breakdowns</div></div>
+    </div>
+    <div class="card">
+      <div style="font-size:11px; color:var(--purple); font-weight:700; text-transform:uppercase; letter-spacing:.08em; margin-bottom:10px;">Intelligence</div>
+      <div class="step-body"><div class="title">Ollama · qwen3:8b</div><div class="desc">Local LLM — no data leaves the machine. Extracts typed claims: revenue, EPS, margins, guidance</div></div>
+    </div>
+    <div class="card">
+      <div style="font-size:11px; color:var(--blue); font-weight:700; text-transform:uppercase; letter-spacing:.08em; margin-bottom:10px;">Verification</div>
+      <div class="step-body"><div class="title">EDGAR XBRL + Tavily</div><div class="desc">SEC filings as primary source of truth. Tavily for recent news, press releases, earnings calls</div></div>
+    </div>
+    <div class="card">
+      <div style="font-size:11px; color:var(--green); font-weight:700; text-transform:uppercase; letter-spacing:.08em; margin-bottom:10px;">Persistence</div>
+      <div class="step-body"><div class="title">MongoDB Atlas</div><div class="desc">Stores snapshots per ticker over time — enables credibility trend analysis across quarters</div></div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════
+     SLIDE 3 — DOCUMENT TYPES & DATA STRUCTURE
+══════════════════════════════════════════════════════════ -->
+<div class="slide" id="s3">
+  <div class="tag">Data Landscape</div>
+  <h2>What's Inside a Financial Report</h2>
+  <p class="sub" style="margin-bottom:28px;">One filing contains hundreds of data points — time-segregated, segment-nested, and often contradictory across sources.</p>
+
+  <div class="grid-2" style="gap:20px;">
+    <!-- LEFT: Document Types -->
+    <div>
+      <div class="section-title">Document Types (Time-Segregated)</div>
+      <div style="display:flex; flex-direction:column; gap:10px;">
+        <div class="card-sm" style="border-left:3px solid var(--blue)">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+            <span style="font-size:14px; font-weight:700;">10-K &nbsp;<span class="badge badge-blue">Annual</span></span>
+            <span style="font-size:11px; color:var(--muted);">~200 pages</span>
+          </div>
+          <div style="font-size:12px; color:var(--muted);">Full-year audited financials, MD&amp;A, risk factors, forward guidance, auditor sign-off. Highest reliability.</div>
+        </div>
+        <div class="card-sm" style="border-left:3px solid var(--cyan)">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+            <span style="font-size:14px; font-weight:700;">10-Q &nbsp;<span class="badge badge-blue">Quarterly</span></span>
+            <span style="font-size:11px; color:var(--muted);">~80 pages</span>
+          </div>
+          <div style="font-size:12px; color:var(--muted);">Unaudited interim numbers, YoY comparisons, updated guidance. Higher revision risk.</div>
+        </div>
+        <div class="card-sm" style="border-left:3px solid var(--amber)">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+            <span style="font-size:14px; font-weight:700;">8-K &nbsp;<span class="badge badge-amber">Event-Driven</span></span>
+            <span style="font-size:11px; color:var(--muted);">~5 pages</span>
+          </div>
+          <div style="font-size:12px; color:var(--muted);">Material events: earnings releases, M&amp;A, executive changes. Claims often unverified at time of filing.</div>
+        </div>
+        <div class="card-sm" style="border-left:3px solid var(--purple)">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+            <span style="font-size:14px; font-weight:700;">Earnings Call PDF &nbsp;<span class="badge badge-purple">Transcript</span></span>
+          </div>
+          <div style="font-size:12px; color:var(--muted);">Forward-looking statements, segment color, analyst Q&amp;A. Highest risk of unverifiable claims.</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- RIGHT: Segment Nesting -->
+    <div>
+      <div class="section-title">Data Nesting (Sector-Segmented) — MSFT Example</div>
+      <div class="card" style="padding:18px;">
+        <!-- Tree -->
+        <div style="font-family:monospace; font-size:13px; line-height:2;">
+          <div style="color:var(--text); font-weight:700;">Microsoft Corp — Total Revenue</div>
+          <div style="padding-left:20px; color:var(--muted);">├─ <span style="color:var(--blue)">Intelligent Cloud</span> &nbsp;<span style="color:var(--muted); font-size:11px;">$105.4B FY24</span></div>
+          <div style="padding-left:40px; color:var(--muted);">├─ <span style="color:var(--cyan)">Azure &amp; Cloud Services</span> &nbsp;<span class="badge badge-blue" style="font-size:10px;">+21% YoY</span></div>
+          <div style="padding-left:40px; color:var(--muted);">└─ Server Products</div>
+          <div style="padding-left:20px; color:var(--muted);">├─ <span style="color:var(--blue)">Productivity &amp; Business</span> &nbsp;<span style="color:var(--muted); font-size:11px;">$77.7B FY24</span></div>
+          <div style="padding-left:40px; color:var(--muted);">├─ Office Commercial</div>
+          <div style="padding-left:40px; color:var(--muted);">└─ LinkedIn</div>
+          <div style="padding-left:20px; color:var(--muted);">└─ <span style="color:var(--blue)">More Personal Computing</span></div>
+          <div style="padding-left:40px; color:var(--muted);">├─ Windows</div>
+          <div style="padding-left:40px; color:var(--muted);">└─ Xbox / Gaming</div>
+        </div>
+      </div>
+      <div class="card-sm" style="margin-top:12px; background:rgba(239,68,68,.06); border-color:rgba(239,68,68,.2);">
+        <div style="font-size:12px; font-weight:600; color:var(--red); margin-bottom:4px;">⚠ The Challenge</div>
+        <div style="font-size:12px; color:var(--muted);">"Azure revenue grew 21%" can be reported in the 10-K, the 8-K press release, and the earnings call — often with slightly different numbers due to FX adjustments, reclassifications, or different time periods. FinValidator reconciles these against the XBRL-tagged filing.</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════
+     SLIDE 4 — SINGLE SOURCE OF TRUTH
+══════════════════════════════════════════════════════════ -->
+<div class="slide" id="s4">
+  <div class="tag">Verification Architecture</div>
+  <h2>Finding the Single Source of Truth</h2>
+  <p class="sub" style="margin-bottom:28px;">Not all data sources are equal. FinValidator uses a strict priority hierarchy to resolve conflicts.</p>
+
+  <div class="grid-2" style="gap:24px;">
+    <div>
+      <div class="section-title">Priority Hierarchy</div>
+      <div class="truth-row">
+        <div class="priority" style="color:var(--green)">1</div>
+        <div>
+          <div class="source">SEC EDGAR XBRL (company-reported)</div>
+          <div class="detail">Machine-readable tags from the actual 10-K/10-Q filing. These are auditor-signed numbers, submitted directly to the SEC under penalty of law. Our ground truth.</div>
+        </div>
+      </div>
+      <div class="truth-row">
+        <div class="priority" style="color:var(--blue)">2</div>
+        <div>
+          <div class="source">FASB Calculation Linkbase (derived)</div>
+          <div class="detail">Standard accounting relationships (GrossProfit = Revenue − COGS). Used when a derived metric isn't explicitly reported but can be computed from reported values via the FormulaGraph.</div>
+        </div>
+      </div>
+      <div class="truth-row">
+        <div class="priority" style="color:var(--amber)">3</div>
+        <div>
+          <div class="source">Tavily Web Search + LLM Reasoning</div>
+          <div class="detail">For non-XBRL claims (guidance, qualitative statements, recent events). Cross-references SEC.gov, BusinessWire, Yahoo Finance. Lowest confidence tier.</div>
+        </div>
+      </div>
+
+      <div class="card-sm" style="margin-top:16px; background:rgba(59,130,246,.06); border-color:rgba(59,130,246,.2);">
+        <div style="font-size:12px; font-weight:600; color:var(--blue); margin-bottom:6px;">FormulaGraph — Derived Metrics</div>
+        <div style="font-family:monospace; font-size:11px; color:var(--muted); line-height:1.8;">
+          ROE &nbsp;&nbsp;&nbsp;&nbsp;&nbsp; = NetIncome ÷ Equity × 100<br/>
+          FCF &nbsp;&nbsp;&nbsp;&nbsp;&nbsp; = OperatingCashFlow − CapEx<br/>
+          FCFMargin = FCF ÷ Revenue × 100<br/>
+          ROIC &nbsp;&nbsp;&nbsp;&nbsp; = NOPAT ÷ InvestedCapital × 100<br/>
+          MACD &nbsp;&nbsp;&nbsp;&nbsp; = EMA(12) − EMA(26)
+        </div>
+      </div>
+    </div>
+
+    <div>
+      <div class="section-title">Grounding Pass — Handling Unverifiable Claims</div>
+      <div style="display:flex; flex-direction:column; gap:0;">
+        <div class="tl-item">
+          <div class="tl-line"><div class="tl-dot"></div><div class="tl-bar"></div></div>
+          <div class="tl-content">
+            <div class="title">Claim Extracted</div>
+            <div class="sub">"Azure revenue grew 29% in FY2024"</div>
+          </div>
+        </div>
+        <div class="tl-item">
+          <div class="tl-line"><div class="tl-dot" style="background:var(--cyan)"></div><div class="tl-bar"></div></div>
+          <div class="tl-content">
+            <div class="title">XBRL Lookup</div>
+            <div class="sub">Query EDGAR for MSFT segment revenue FY2024 Q4. If found → VERIFIED.</div>
+          </div>
+        </div>
+        <div class="tl-item">
+          <div class="tl-line"><div class="tl-dot" style="background:var(--amber)"></div><div class="tl-bar"></div></div>
+          <div class="tl-content">
+            <div class="title">RAG Fallback</div>
+            <div class="sub">Check ingested 10-K text chunks via vector similarity. Segment-specific numbers often buried here.</div>
+          </div>
+        </div>
+        <div class="tl-item">
+          <div class="tl-line"><div class="tl-dot" style="background:var(--red)"></div><div class="tl-bar"></div></div>
+          <div class="tl-content">
+            <div class="title">Grounding Pass ← New</div>
+            <div class="sub">Claims still UNVERIFIABLE get a second pass: Tavily web search → LLM re-reasons with fresh citations. Most resolve to PARTIALLY_VERIFIED (conf ~0.68).</div>
+          </div>
+        </div>
+        <div class="tl-item">
+          <div class="tl-line"><div class="tl-dot" style="background:var(--green)"></div></div>
+          <div class="tl-content">
+            <div class="title">Final Verdict</div>
+            <div class="sub">VERIFIED / PARTIALLY_VERIFIED / CONTRADICTED / UNVERIFIABLE + confidence 0–1</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════
+     SLIDE 5 — VALIDATION PIPELINE
+══════════════════════════════════════════════════════════ -->
+<div class="slide" id="s5">
+  <div class="tag">Core Engine</div>
+  <h2>The 7-Step Validation Pipeline</h2>
+  <p class="sub" style="margin-bottom:24px;">Each claim runs through every step independently and in parallel — a single report with 30 claims takes ~2 minutes end-to-end.</p>
+
+  <div class="grid-2" style="gap:20px; align-items:start;">
+    <div>
+      <div class="step"><div class="step-num">1</div><div class="step-body"><div class="title">Claim Extraction</div><div class="desc">LLM reads each section and outputs typed claims: {type: "revenue", ticker: "MSFT", value: 61.9, unit: "B", period: "FY24"}</div></div></div>
+      <div class="step"><div class="step-num">2</div><div class="step-body"><div class="title">XBRL Direct Lookup</div><div class="desc">Query SEC EDGAR XBRL API for the exact concept (us-gaap:Revenues) for the reported period. Strongest possible match.</div></div></div>
+      <div class="step"><div class="step-num">3</div><div class="step-body"><div class="title">FormulaGraph Derivation</div><div class="desc">If direct concept not found, compute it from parent concepts via the pre-built directed acyclic formula graph.</div></div></div>
+      <div class="step"><div class="step-num">4</div><div class="step-body"><div class="title">Non-GAAP Reconciliation</div><div class="desc">Detect adjusted/non-GAAP metrics (Adjusted EPS, Organic Revenue) and flag reconciliation gaps vs. GAAP equivalents.</div></div></div>
+    </div>
+    <div>
+      <div class="step"><div class="step-num">5</div><div class="step-body"><div class="title">RAG Vector Search</div><div class="desc">Semantic search over ingested 10-K text chunks. Catches narrative claims, segment color, and guidance language.</div></div></div>
+      <div class="step"><div class="step-num">6</div><div class="step-body"><div class="title">Web Search (Tavily)</div><div class="desc">Live search across SEC.gov, BusinessWire, Yahoo Finance. LLM reasons over returned citations to produce a confidence score.</div></div></div>
+      <div class="step"><div class="step-num" style="background:rgba(239,68,68,.15); border-color:rgba(239,68,68,.4); color:var(--red)">7</div><div class="step-body"><div class="title">Grounding Pass <span class="badge badge-blue" style="font-size:10px; vertical-align:middle;">New</span></div><div class="desc">UNVERIFIABLE claims re-enter the pipeline with broader search queries. Recovers ~60% of initially unverifiable claims.</div></div></div>
+
+      <div class="card-sm" style="margin-top:6px; background:rgba(34,197,94,.06); border-color:rgba(34,197,94,.2);">
+        <div class="section-title" style="margin-bottom:8px;">Output per Claim</div>
+        <div style="display:flex; gap:8px; flex-wrap:wrap;">
+          <span class="badge badge-green">VERIFIED</span>
+          <span class="badge badge-blue">PARTIALLY_VERIFIED</span>
+          <span class="badge badge-amber">UNVERIFIABLE</span>
+          <span class="badge badge-red">CONTRADICTED</span>
+          <span class="badge badge-red">ERROR</span>
+        </div>
+        <div style="font-size:12px; color:var(--muted); margin-top:8px;">+ confidence 0.0–1.0 &nbsp;·&nbsp; citations[] &nbsp;·&nbsp; reasoning text &nbsp;·&nbsp; severity flag (HIGH/MEDIUM/LOW)</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════
+     SLIDE 6 — CREDIBILITY SCORING
+══════════════════════════════════════════════════════════ -->
+<div class="slide" id="s6">
+  <div class="tag">Report Scoring</div>
+  <h2>Credibility Score &amp; Trend Layer</h2>
+  <p class="sub" style="margin-bottom:24px;">A single report score is a point-in-time snapshot. The trend layer tracks how a company's reporting quality changes across quarters.</p>
+
+  <div class="grid-2" style="gap:24px;">
+    <div>
+      <div class="section-title">How the Report Score is Computed</div>
+      <div class="card" style="margin-bottom:14px;">
+        <div class="score-row"><div class="score-label"><span>Verified Claims Rate</span><span style="color:var(--green)">Weight: 40%</span></div><div class="bar-track"><div class="bar-fill" style="width:72%; background:var(--green)"></div></div></div>
+        <div class="score-row"><div class="score-label"><span>Evidence Quality</span><span style="color:var(--blue)">Weight: 25%</span></div><div class="bar-track"><div class="bar-fill" style="width:65%; background:var(--blue)"></div></div></div>
+        <div class="score-row"><div class="score-label"><span>No Contradictions</span><span style="color:var(--amber)">Weight: 20%</span></div><div class="bar-track"><div class="bar-fill" style="width:80%; background:var(--amber)"></div></div></div>
+        <div class="score-row" style="margin-bottom:0"><div class="score-label"><span>Analyst Bias Balance</span><span style="color:var(--purple)">Weight: 15%</span></div><div class="bar-track"><div class="bar-fill" style="width:55%; background:var(--purple)"></div></div></div>
+      </div>
+      <div class="card-sm">
+        <div class="section-title" style="margin-bottom:8px;">Credibility Ratings</div>
+        <div style="display:flex; flex-direction:column; gap:6px;">
+          <div style="display:flex; justify-content:space-between; font-size:12px;"><span>≥ 80</span><span class="badge badge-green">HIGHLY CREDIBLE</span></div>
+          <div style="display:flex; justify-content:space-between; font-size:12px;"><span>60 – 79</span><span class="badge badge-blue">CREDIBLE</span></div>
+          <div style="display:flex; justify-content:space-between; font-size:12px;"><span>40 – 59</span><span class="badge badge-amber">MIXED</span></div>
+          <div style="display:flex; justify-content:space-between; font-size:12px;"><span>&lt; 40</span><span class="badge badge-red">LOW CREDIBILITY</span></div>
+        </div>
+      </div>
+    </div>
+    <div>
+      <div class="section-title">Trend Layer — Credibility Over Time</div>
+      <div class="card" style="margin-bottom:14px;">
+        <!-- Sparkline bars -->
+        <div style="display:flex; align-items:flex-end; gap:8px; height:90px; margin-bottom:8px;">
+          <div style="display:flex;flex-direction:column;align-items:center;gap:4px;flex:1"><div style="flex:1;display:flex;flex-direction:column;justify-content:flex-end;width:100%"><div style="height:45%;background:var(--amber);border-radius:4px 4px 0 0;"></div></div><div style="font-size:9px;color:var(--muted)">Q1</div></div>
+          <div style="display:flex;flex-direction:column;align-items:center;gap:4px;flex:1"><div style="flex:1;display:flex;flex-direction:column;justify-content:flex-end;width:100%"><div style="height:58%;background:var(--amber);border-radius:4px 4px 0 0;"></div></div><div style="font-size:9px;color:var(--muted)">Q2</div></div>
+          <div style="display:flex;flex-direction:column;align-items:center;gap:4px;flex:1"><div style="flex:1;display:flex;flex-direction:column;justify-content:flex-end;width:100%"><div style="height:62%;background:var(--blue);border-radius:4px 4px 0 0;"></div></div><div style="font-size:9px;color:var(--muted)">Q3</div></div>
+          <div style="display:flex;flex-direction:column;align-items:center;gap:4px;flex:1"><div style="flex:1;display:flex;flex-direction:column;justify-content:flex-end;width:100%"><div style="height:71%;background:var(--blue);border-radius:4px 4px 0 0;"></div></div><div style="font-size:9px;color:var(--muted)">Q4</div></div>
+          <div style="display:flex;flex-direction:column;align-items:center;gap:4px;flex:1"><div style="flex:1;display:flex;flex-direction:column;justify-content:flex-end;width:100%"><div style="height:73%;background:var(--green);border-radius:4px 4px 0 0;"></div></div><div style="font-size:9px;color:var(--muted)">Q1</div></div>
+          <div style="display:flex;flex-direction:column;align-items:center;gap:4px;flex:1"><div style="flex:1;display:flex;flex-direction:column;justify-content:flex-end;width:100%"><div style="height:78%;background:var(--green);border-radius:4px 4px 0 0;"></div></div><div style="font-size:9px;color:var(--muted)">Q2</div></div>
+        </div>
+        <div style="font-size:12px; color:var(--muted);">Credibility improving over 6 quarters → signals increasingly clean disclosures</div>
+      </div>
+      <div class="card-sm">
+        <div style="font-size:12px; font-weight:600; margin-bottom:6px;">What the trend reveals</div>
+        <div style="font-size:12px; color:var(--muted); line-height:1.7;">
+          ↑ Improving → management tightening disclosure discipline<br/>
+          ↓ Declining → increasing use of non-GAAP, unverifiable guidance<br/>
+          Spike down → typically around M&amp;A events, restatements
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════
+     SLIDE 7 — EMPIRICAL STOCK SCORE
+══════════════════════════════════════════════════════════ -->
+<div class="slide" id="s7">
+  <div class="tag">Empirical Score</div>
+  <h2>The Empirical Stock Score Formula</h2>
+  <p class="sub" style="margin-bottom:24px;">Four independently sourced signals, combined into a single 0–100 composite. Missing data renormalizes weights rather than defaulting to neutral.</p>
+
+  <div class="grid-4" style="margin-bottom:20px;">
+    <div class="card" style="border-top:3px solid var(--blue)">
+      <div style="font-size:22px; font-weight:800; color:var(--blue)">F</div>
+      <div style="font-size:14px; font-weight:700; margin:4px 0;">Fundamental</div>
+      <div style="font-size:11px; color:var(--muted); line-height:1.6; margin-bottom:10px;">SEC EDGAR XBRL<br/>ROE · Net Margin · Revenue Growth · EPS Growth · Debt/Equity · FCF Margin · ROIC</div>
+      <div class="badge badge-blue">Weight: 40%</div>
+    </div>
+    <div class="card" style="border-top:3px solid var(--cyan)">
+      <div style="font-size:22px; font-weight:800; color:var(--cyan)">T</div>
+      <div style="font-size:14px; font-weight:700; margin:4px 0;">Technical</div>
+      <div style="font-size:11px; color:var(--muted); line-height:1.6; margin-bottom:10px;">yfinance · live prices<br/>RSI-14 · SMA50/200 · MACD · 12M Momentum · Volume Signal</div>
+      <div class="badge badge-blue">Weight: 25%</div>
+    </div>
+    <div class="card" style="border-top:3px solid var(--green)">
+      <div style="font-size:22px; font-weight:800; color:var(--green)">Q</div>
+      <div style="font-size:14px; font-weight:700; margin:4px 0;">Qualitative</div>
+      <div style="font-size:11px; color:var(--muted); line-height:1.6; margin-bottom:10px;">CredibilitySnapshot<br/>Verified rate · Contradiction rate · Analyst bias balance</div>
+      <div class="badge badge-blue">Weight: 20%</div>
+    </div>
+    <div class="card" style="border-top:3px solid var(--amber)">
+      <div style="font-size:22px; font-weight:800; color:var(--amber)">M</div>
+      <div style="font-size:14px; font-weight:700; margin:4px 0;">Macro</div>
+      <div style="font-size:11px; color:var(--muted); line-height:1.6; margin-bottom:10px;">Sector / rates context<br/>Placeholder 5.0 — sector data integration in next phase</div>
+      <div class="badge badge-blue">Weight: 15%</div>
+    </div>
+  </div>
+
+  <div class="formula-box">
+    Composite = &nbsp;<span>0.40 × F</span>&nbsp; + &nbsp;<span>0.25 × T</span>&nbsp; + &nbsp;<span>0.20 × Q</span>&nbsp; + &nbsp;<span>0.15 × M</span>
+    &nbsp;&nbsp;&nbsp;→&nbsp;&nbsp;&nbsp; 0 – 100 Scale
+  </div>
+
+  <div class="grid-4" style="margin-top:14px;">
+    <div class="card-sm" style="text-align:center"><div style="font-size:12px; color:var(--muted); margin-bottom:2px;">≥ 82</div><div class="badge badge-green">STRONG BUY</div></div>
+    <div class="card-sm" style="text-align:center"><div style="font-size:12px; color:var(--muted); margin-bottom:2px;">70 – 81</div><div class="badge badge-green">BUY</div></div>
+    <div class="card-sm" style="text-align:center"><div style="font-size:12px; color:var(--muted); margin-bottom:2px;">50 – 69</div><div class="badge badge-amber">HOLD</div></div>
+    <div class="card-sm" style="text-align:center"><div style="font-size:12px; color:var(--muted); margin-bottom:2px;">&lt; 50</div><div class="badge badge-red">REDUCE / SELL</div></div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════
+     SLIDE 8 — 3-HORIZON DASHBOARD
+══════════════════════════════════════════════════════════ -->
+<div class="slide" id="s8">
+  <div class="tag">Recommendation Engine</div>
+  <h2>Three-Horizon Recommendation Dashboard</h2>
+  <p class="sub" style="margin-bottom:22px;">Each horizon weights the four signals differently — short-term is technically driven, long-term is fundamentally driven.</p>
+
+  <div class="grid-3" style="gap:16px; margin-bottom:18px;">
+    <!-- SHORT TERM -->
+    <div class="card" style="border-top:3px solid var(--amber)">
+      <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:12px;">
+        <div>
+          <div style="font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:.08em;">Short Term</div>
+          <div style="font-size:13px; font-weight:600; color:var(--muted);">1–4 Weeks</div>
+        </div>
+        <span class="badge badge-amber">T-Dominant</span>
+      </div>
+      <div style="font-family:monospace; font-size:12px; color:var(--muted); background:rgba(0,0,0,.3); border-radius:6px; padding:10px; line-height:1.8; margin-bottom:12px;">
+        Score = T×<span style="color:var(--cyan)">0.60</span> + C×0.30 + Q×0.10<br/>
+        <span style="color:var(--border)">── if T unavailable ──────────────</span><br/>
+        Score = C×0.85 + Q×0.15
+      </div>
+      <div style="font-size:12px; color:var(--muted); line-height:1.6;">Driven by: MACD · RSI · MA cross · 30d momentum · volume signal</div>
+    </div>
+
+    <!-- MEDIUM TERM -->
+    <div class="card" style="border-top:3px solid var(--blue)">
+      <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:12px;">
+        <div>
+          <div style="font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:.08em;">Medium Term</div>
+          <div style="font-size:13px; font-weight:600; color:var(--muted);">1–6 Months</div>
+        </div>
+        <span class="badge badge-blue">F + T Blend</span>
+      </div>
+      <div style="font-family:monospace; font-size:12px; color:var(--muted); background:rgba(0,0,0,.3); border-radius:6px; padding:10px; line-height:1.8; margin-bottom:12px;">
+        Score = F×<span style="color:var(--blue)">0.40</span> + T×0.35 + Q×0.25<br/>
+        <span style="color:var(--border)">── if F only ─────────────────────</span><br/>
+        Score = F×0.55 + Q×0.30 + C×0.15
+      </div>
+      <div style="font-size:12px; color:var(--muted); line-height:1.6;">Driven by: Revenue growth · EPS growth · net margin · 12M price momentum</div>
+    </div>
+
+    <!-- LONG TERM -->
+    <div class="card" style="border-top:3px solid var(--green)">
+      <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:12px;">
+        <div>
+          <div style="font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:.08em;">Long Term</div>
+          <div style="font-size:13px; font-weight:600; color:var(--muted);">1–3 Years</div>
+        </div>
+        <span class="badge badge-green">F-Dominant</span>
+      </div>
+      <div style="font-family:monospace; font-size:12px; color:var(--muted); background:rgba(0,0,0,.3); border-radius:6px; padding:10px; line-height:1.8; margin-bottom:12px;">
+        Score = F×<span style="color:var(--green)">0.55</span> + Q×0.30 + M×0.10 + C×0.05<br/>
+        <span style="color:var(--border)">── if F unavailable ──────────────</span><br/>
+        Score = Q×0.40 + C×0.45 + M×0.15
+      </div>
+      <div style="font-size:12px; color:var(--muted); line-height:1.6;">Driven by: ROE · ROIC · FCF margin · debt/equity · report credibility trend</div>
+    </div>
+  </div>
+
+  <div class="card" style="padding:14px 20px;">
+    <div style="display:flex; gap:32px; align-items:center; flex-wrap:wrap;">
+      <div style="font-size:13px; font-weight:600;">Labels &nbsp;→</div>
+      <span class="badge badge-green">STRONG BUY &nbsp;≥82</span>
+      <span class="badge badge-green">BUY &amp; HOLD &nbsp;≥70 (LT)</span>
+      <span class="badge badge-blue">BUY &nbsp;≥65</span>
+      <span class="badge badge-amber">HOLD &nbsp;≥50</span>
+      <span class="badge badge-red">REDUCE &nbsp;≥35</span>
+      <span class="badge badge-red">SELL &nbsp;&lt;35</span>
+      <div style="margin-left:auto; font-size:12px; color:var(--muted);">Each card also shows: confidence ★ (1–5) · horizon · driver · bullet-point reasoning</div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════
+     SLIDE 9 — CLOSING / ROADMAP
+══════════════════════════════════════════════════════════ -->
+<div class="slide" id="s9">
+  <div class="tag">Next Steps</div>
+  <h2>What's Live · What's Next</h2>
+  <p class="sub" style="margin-bottom:28px;"></p>
+
+  <div class="grid-2" style="gap:24px;">
+    <div>
+      <div class="section-title">Currently Live ✓</div>
+      <div style="display:flex; flex-direction:column; gap:8px;">
+        <div class="card-sm" style="display:flex; align-items:center; gap:12px;">
+          <span style="color:var(--green); font-size:18px;">✓</span>
+          <div><div style="font-size:13px; font-weight:600;">PDF → Claim → Validate pipeline</div><div style="font-size:11px; color:var(--muted);">Docling + qwen3:8b + 7-step verification + grounding pass</div></div>
+        </div>
+        <div class="card-sm" style="display:flex; align-items:center; gap:12px;">
+          <span style="color:var(--green); font-size:18px;">✓</span>
+          <div><div style="font-size:13px; font-weight:600;">EDGAR XBRL ingestion &amp; FormulaGraph</div><div style="font-size:11px; color:var(--muted);">ROE, FCF Margin, ROIC, NetMargin — all derived on the fly</div></div>
+        </div>
+        <div class="card-sm" style="display:flex; align-items:center; gap:12px;">
+          <span style="color:var(--green); font-size:18px;">✓</span>
+          <div><div style="font-size:13px; font-weight:600;">Empirical Stock Score (F·T·Q·M)</div><div style="font-size:11px; color:var(--muted);">Live composite + fundamentals + technical signals</div></div>
+        </div>
+        <div class="card-sm" style="display:flex; align-items:center; gap:12px;">
+          <span style="color:var(--green); font-size:18px;">✓</span>
+          <div><div style="font-size:13px; font-weight:600;">ST / MT / LT recommendation dashboard</div><div style="font-size:11px; color:var(--muted);">With confidence stars, driver labels, bullet reasoning</div></div>
+        </div>
+        <div class="card-sm" style="display:flex; align-items:center; gap:12px;">
+          <span style="color:var(--green); font-size:18px;">✓</span>
+          <div><div style="font-size:13px; font-weight:600;">Credibility trend layer</div><div style="font-size:11px; color:var(--muted);">Per-ticker snapshot history across quarters in MongoDB</div></div>
+        </div>
+      </div>
+    </div>
+    <div>
+      <div class="section-title">Roadmap — Phase 2</div>
+      <div style="display:flex; flex-direction:column; gap:8px;">
+        <div class="card-sm" style="display:flex; align-items:center; gap:12px; opacity:.8;">
+          <span style="color:var(--blue); font-size:18px;">◎</span>
+          <div><div style="font-size:13px; font-weight:600;">Macro Score (M) — Live Data</div><div style="font-size:11px; color:var(--muted);">Sector ETF momentum, interest rate overlay, VIX signal</div></div>
+        </div>
+        <div class="card-sm" style="display:flex; align-items:center; gap:12px; opacity:.8;">
+          <span style="color:var(--blue); font-size:18px;">◎</span>
+          <div><div style="font-size:13px; font-weight:600;">Peer Benchmarking</div><div style="font-size:11px; color:var(--muted);">Score a company's metrics vs. sector median — not just absolute values</div></div>
+        </div>
+        <div class="card-sm" style="display:flex; align-items:center; gap:12px; opacity:.8;">
+          <span style="color:var(--blue); font-size:18px;">◎</span>
+          <div><div style="font-size:13px; font-weight:600;">Watchlist &amp; Alerts</div><div style="font-size:11px; color:var(--muted);">Auto-run on new 10-Q filings, alert on credibility drops &gt;10 pts</div></div>
+        </div>
+        <div class="card-sm" style="display:flex; align-items:center; gap:12px; opacity:.8;">
+          <span style="color:var(--blue); font-size:18px;">◎</span>
+          <div><div style="font-size:13px; font-weight:600;">Feedback-Driven Retraining</div><div style="font-size:11px; color:var(--muted);">Analyst corrections feed back into retrieval ranking — system improves over time</div></div>
+        </div>
+        <div class="card-sm" style="display:flex; align-items:center; gap:12px; opacity:.8;">
+          <span style="color:var(--blue); font-size:18px;">◎</span>
+          <div><div style="font-size:13px; font-weight:600;">Multi-ticker Portfolio View</div><div style="font-size:11px; color:var(--muted);">Score a portfolio basket, surface the weakest credibility links</div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── NAV ──────────────────────────────────────────────── -->
+<div class="nav">
+  <button onclick="prev()">← Prev</button>
+  <div class="dots" id="dots"></div>
+  <button onclick="next()">Next →</button>
+</div>
+<div class="slide-num" id="slideNum"></div>
+
+<script>
+  const slides = document.querySelectorAll('.slide');
+  const titles = ["Cover","Flow & Tech Stack","Document Types","Source of Truth","Validation Pipeline","Credibility Scoring","Empirical Formula","3-Horizon Dashboard","Roadmap"];
+  let cur = 0;
+
+  function render() {
+    slides.forEach((s,i) => s.classList.toggle('active', i===cur));
+    document.getElementById('slideNum').textContent = titles[cur] + ' — ' + (cur+1) + ' / ' + slides.length;
+    const dc = document.getElementById('dots');
+    dc.innerHTML = titles.map((_,i) => `<div class="dot ${i===cur?'active':''}" onclick="go(${i})"></div>`).join('');
+  }
+
+  function next() { if(cur<slides.length-1){ cur++; render(); } }
+  function prev() { if(cur>0){ cur--; render(); } }
+  function go(i) { cur=i; render(); }
+
+  document.addEventListener('keydown', e => {
+    if(e.key==='ArrowRight'||e.key===' ') next();
+    if(e.key==='ArrowLeft') prev();
+  });
+
+  render();
+</script>
+</body>
+</html>
