@@ -888,11 +888,10 @@ async def validate_one_liner(req: OneLinerRequest):
     if len(claim_text) > 500:
         raise HTTPException(status_code=400, detail="claim must be 500 characters or fewer")
 
-    try:
+    async def _run():
         from .claim_extractor import extract_claims
         from .validator import validate_claim
 
-        # Prepend ticker hint so extraction can tag claims correctly
         text = claim_text
         if req.ticker:
             text = f"[{req.ticker.strip().upper()}] {claim_text}"
@@ -907,14 +906,16 @@ async def validate_one_liner(req: OneLinerRequest):
                 "message": "No verifiable claim detected. Try including a specific number and company name.",
             }
 
-        # Validate all extracted claims (usually 1–3 for a one-liner)
-        import asyncio as _asyncio
-        raw_results = await _asyncio.gather(*[validate_claim(c) for c in claims], return_exceptions=True)
+        # One-liner: validate only the first claim to stay within the 25s budget
+        claim = claims[0]
+        try:
+            res = await validate_claim(claim)
+        except Exception as exc:
+            logger.warning("validate_claim failed: %s", exc)
+            res = None
 
         results = []
-        for claim, res in zip(claims, raw_results):
-            if isinstance(res, Exception):
-                continue
+        if res is not None:
             results.append({
                 "claim_text":   claim.raw_text,
                 "type":         claim.type.value,
@@ -934,13 +935,23 @@ async def validate_one_liner(req: OneLinerRequest):
             })
 
         return {
-            "input":             claim_text,
-            "ticker":            req.ticker,
-            "claims_extracted":  len(claims),
-            "results":           results,
-            "backend":           "ollama" if os.getenv("OLLAMA_BASE_URL") else "groq",
+            "input":            claim_text,
+            "ticker":           req.ticker,
+            "claims_extracted": len(claims),
+            "results":          results,
+            "backend":          "ollama" if os.getenv("OLLAMA_BASE_URL") else "groq",
         }
 
+    try:
+        return await asyncio.wait_for(_run(), timeout=25.0)
+    except asyncio.TimeoutError:
+        return {
+            "input":            claim_text,
+            "ticker":           req.ticker,
+            "claims_extracted": 0,
+            "results":          [],
+            "message":          "Validation timed out (>25s). Try a simpler claim with a ticker symbol.",
+        }
     except Exception as exc:
         logger.error("validate-one-liner error: %s", exc)
         raise HTTPException(status_code=500, detail=str(exc))
